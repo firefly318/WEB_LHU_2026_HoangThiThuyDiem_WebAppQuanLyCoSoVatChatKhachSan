@@ -5,7 +5,7 @@ import {
 } from 'recharts';
 import { 
   AlertTriangle, ArrowDownRight, ArrowUpRight, Award, 
-  CheckCircle, Database, Package, ShieldAlert, TrendingUp, Sparkles, Brain
+  CheckCircle, Database, Package, ShieldAlert, TrendingUp, Sparkles, Brain, CalendarClock
 } from 'lucide-react';
 
 export default function Dashboard() {
@@ -17,10 +17,23 @@ export default function Dashboard() {
   const [aiInsight, setAiInsight] = useState('');
   const [aiLoading, setAiLoading] = useState(false);
 
+  // Expiring materials
+  const [expiringMaterials, setExpiringMaterials] = useState([]);
+
   useEffect(() => {
     fetchDashboardData();
     fetchAIInsights();
+    fetchExpiringSoon();
   }, []);
+
+  const fetchExpiringSoon = async () => {
+    try {
+      const res = await api.get('/reports/expiring-soon?days=30&top=10');
+      setExpiringMaterials(res.data);
+    } catch (err) {
+      console.error('Failed to fetch expiring materials:', err);
+    }
+  };
 
   const fetchDashboardData = async () => {
     try {
@@ -287,34 +300,60 @@ export default function Dashboard() {
             </div>
           </div>
 
-          {/* Lịch sử hoạt động */}
-          <div className="bg-white border border-sky-100 p-4 rounded-xl shadow-sm flex flex-col flex-1 min-h-0">
-            <h4 className="text-sm font-bold text-slate-800 mb-2">Hoạt động xuất kho gần đây</h4>
+          {/* Vật tư sắp hết hạn */}
+          <div className="bg-white border border-rose-100 p-4 rounded-xl shadow-sm flex flex-col flex-1 min-h-0">
+            <div className="flex items-center justify-between mb-2">
+              <h4 className="text-sm font-bold text-slate-800 flex items-center gap-2">
+                <CalendarClock className="text-rose-500 animate-pulse" size={16} />
+                Vật tư sắp hết hạn (30 ngày)
+              </h4>
+              <span className="px-2 py-0.5 bg-rose-50 text-rose-600 text-xs rounded-full border border-rose-100 font-medium">
+                Top 10
+              </span>
+            </div>
             <div className="overflow-auto flex-1">
-              <table className="w-full text-left text-xs border-collapse">
-                <thead>
-                  <tr className="border-b border-sky-100 text-slate-500 bg-sky-50/20">
-                    <th className="py-2 px-3 font-bold">Số phiếu</th>
-                    <th className="py-2 px-3 font-bold">Ngày xuất</th>
-                    <th className="py-2 px-3 font-bold">Bộ phận</th>
-                    <th className="py-2 px-3 font-bold">Người lập</th>
-                    <th className="py-2 px-3 font-bold">TT</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {RecentActivities.map((act, index) => (
-                    <tr key={index} className="border-b border-sky-50 hover:bg-sky-50/10 transition-all">
-                      <td className="py-2 px-3 font-semibold text-slate-700">{act.SoPhieuXuat}</td>
-                      <td className="py-2 px-3 text-slate-500">{new Date(act.NgayXuat).toLocaleDateString('vi-VN')}</td>
-                      <td className="py-2 px-3 text-slate-700 font-medium truncate max-w-[90px]">{act.BoPhanNhan}</td>
-                      <td className="py-2 px-3 text-slate-500">{act.NguoiYeuCau}</td>
-                      <td className="py-2 px-3">
-                        <span className="px-2 py-0.5 bg-emerald-50 text-emerald-600 border border-emerald-100 text-xs rounded-full font-medium">Cấp phát</span>
-                      </td>
+              {expiringMaterials.length === 0 ? (
+                <div className="h-full flex flex-col items-center justify-center text-slate-400 text-xs gap-1">
+                  <CalendarClock size={24} className="text-slate-300" />
+                  <span>Không có vật tư nào hết hạn trong 30 ngày tới.</span>
+                  <span className="text-slate-300 text-[10px]">Hãy cập nhật ngày hết hạn trong mục Quản lý Vật Tư.</span>
+                </div>
+              ) : (
+                <table className="w-full text-left text-xs border-collapse">
+                  <thead>
+                    <tr className="border-b border-rose-100 text-slate-500 bg-rose-50/30 sticky top-0">
+                      <th className="py-1.5 px-2 font-bold">Mã VT</th>
+                      <th className="py-1.5 px-2 font-bold">Tên vật tư</th>
+                      <th className="py-1.5 px-2 font-bold">Loại</th>
+                      <th className="py-1.5 px-2 font-bold">Tồn kho</th>
+                      <th className="py-1.5 px-2 font-bold">Hết hạn</th>
+                      <th className="py-1.5 px-2 font-bold">Còn lại</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {expiringMaterials.map((mat) => {
+                      const days = mat.DaysRemaining;
+                      const urgency = days <= 7 ? 'bg-red-50 text-red-600 border-red-100'
+                        : days <= 15 ? 'bg-orange-50 text-orange-600 border-orange-100'
+                        : 'bg-yellow-50 text-yellow-700 border-yellow-100';
+                      return (
+                        <tr key={mat.MaterialId} className="border-b border-rose-50 hover:bg-rose-50/20 transition-all">
+                          <td className="py-1.5 px-2 font-semibold text-slate-600">{mat.MaterialCode}</td>
+                          <td className="py-1.5 px-2 text-slate-700 font-medium truncate max-w-[110px]">{mat.MaterialName}</td>
+                          <td className="py-1.5 px-2 text-slate-500 truncate max-w-[80px]">{mat.CategoryName}</td>
+                          <td className="py-1.5 px-2 text-slate-700 font-semibold">{mat.StockQuantity} <span className="font-normal text-slate-400">{mat.Unit}</span></td>
+                          <td className="py-1.5 px-2 text-slate-500">{new Date(mat.ExpiryDate).toLocaleDateString('vi-VN')}</td>
+                          <td className="py-1.5 px-2">
+                            <span className={`px-2 py-0.5 rounded-full border text-xs font-bold ${urgency}`}>
+                              {days === 0 ? 'Hôm nay!' : `${days} ngày`}
+                            </span>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              )}
             </div>
           </div>
         </div>

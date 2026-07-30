@@ -23,6 +23,7 @@ export default function MaterialList() {
   const [dvt, setDvt] = useState('');
   const [minQty, setMinQty] = useState(0);
   const [catId, setCatId] = useState('');
+  const [expiryDate, setExpiryDate] = useState('');
   const [submitError, setSubmitError] = useState(null);
 
   useEffect(() => {
@@ -91,6 +92,7 @@ export default function MaterialList() {
     setDvt('');
     setMinQty(0);
     setCatId(categories[0]?.MaDanhMuc || '');
+    setExpiryDate('');
     setSubmitError(null);
     setIsModalOpen(true);
   };
@@ -102,6 +104,7 @@ export default function MaterialList() {
     setDvt(mat.DonViTinh);
     setMinQty(mat.SoLuongToiThieu);
     setCatId(mat.MaDanhMuc);
+    setExpiryDate(mat.ExpiryDate ? mat.ExpiryDate.substring(0, 10) : '');
     setSubmitError(null);
     setIsModalOpen(true);
   };
@@ -118,7 +121,8 @@ export default function MaterialList() {
       TenVatTu: name,
       DonViTinh: dvt,
       SoLuongToiThieu: parseInt(minQty),
-      MaDanhMuc: parseInt(catId)
+      MaDanhMuc: parseInt(catId),
+      ExpiryDate: expiryDate || null
     };
 
     try {
@@ -457,6 +461,18 @@ export default function MaterialList() {
                     className="w-full bg-slate-50 border border-sky-150 rounded-xl px-4 py-2.5 text-sm text-slate-800 focus:outline-none focus:border-sky-500 focus:bg-white transition-all"
                   />
                 </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-500 mb-1.5">NGÀY HẾT HẠN <span className="text-slate-400 font-normal">(không bắt buộc)</span></label>
+                <input
+                  type="date"
+                  value={expiryDate}
+                  onChange={(e) => setExpiryDate(e.target.value)}
+                  min={new Date().toISOString().substring(0, 10)}
+                  className="w-full bg-slate-50 border border-sky-150 rounded-xl px-4 py-2.5 text-sm text-slate-800 focus:outline-none focus:border-sky-500 focus:bg-white transition-all"
+                />
+                <p className="text-[10px] text-slate-400 mt-1">Dùng để cảnh báo hết hạn trên Dashboard (30 ngày trước).</p>
               </div>
 
               <div className="flex items-center justify-end gap-3 pt-2">

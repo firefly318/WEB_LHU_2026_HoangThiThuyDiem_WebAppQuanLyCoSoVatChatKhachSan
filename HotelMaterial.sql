@@ -25,11 +25,22 @@ CREATE TABLE Users (
     Username VARCHAR(50) NOT NULL UNIQUE,
     PasswordHash VARCHAR(255) NOT NULL,
     FullName NVARCHAR(100) NOT NULL,
+    Email VARCHAR(100) NULL,
     RoleId INT NOT NULL,
     IsActive BIT DEFAULT 1,
     Permissions INT NOT NULL DEFAULT 7,
     CreatedAt DATETIME DEFAULT GETDATE(),
     CONSTRAINT FK_Users_Roles FOREIGN KEY (RoleId) REFERENCES Roles(RoleId)
+);
+
+-- Bảng User_Password_History (Lịch sử đổi/reset mật khẩu)
+CREATE TABLE User_Password_History (
+    HistoryId INT IDENTITY(1,1) PRIMARY KEY,
+    UserId INT NOT NULL,
+    ActionType NVARCHAR(50) NOT NULL, -- 'ADMIN_RESET', 'USER_CHANGE', 'FORGOT_PASSWORD'
+    PerformedBy NVARCHAR(100) NOT NULL,
+    CreatedAt DATETIME DEFAULT GETDATE(),
+    CONSTRAINT FK_PassHistory_Users FOREIGN KEY (UserId) REFERENCES Users(UserId)
 );
 
 -- Bảng Categories (Loại vật tư)
@@ -48,6 +59,7 @@ CREATE TABLE Materials (
     StockQuantity INT DEFAULT 0,
     MinRequiredQuantity INT DEFAULT 0,
     CategoryId INT NOT NULL,
+    ExpiryDate DATE NULL,
     IsActive BIT DEFAULT 1,
     CONSTRAINT FK_Materials_Categories FOREIGN KEY (CategoryId) REFERENCES Categories(CategoryId),
     CONSTRAINT CHK_Materials_Stock CHECK (StockQuantity >= 0),
@@ -72,10 +84,14 @@ CREATE TABLE Departments (
 CREATE TABLE GoodsReceiptNotes (
     GRN_Id INT IDENTITY(1,1) PRIMARY KEY,
     GRN_Code VARCHAR(50) NOT NULL UNIQUE,
-    SupplierId INT NOT NULL,
+    SupplierId INT NULL,
+    DepartmentId INT NULL,
     UserId INT NOT NULL,
     ReceivedDate DATETIME DEFAULT GETDATE(),
+    ReceiptType VARCHAR(20) DEFAULT 'NCC',
+    Note NVARCHAR(255) NULL,
     CONSTRAINT FK_GRN_Suppliers FOREIGN KEY (SupplierId) REFERENCES Suppliers(SupplierId),
+    CONSTRAINT FK_GRN_Departments FOREIGN KEY (DepartmentId) REFERENCES Departments(DepartmentId),
     CONSTRAINT FK_GRN_Users FOREIGN KEY (UserId) REFERENCES Users(UserId)
 );
 
@@ -238,13 +254,29 @@ GO
 
 CREATE PROCEDURE sp_User_ResetPassword
     @TargetUserId INT,
-    @NewPasswordHash VARCHAR(255)
+    @NewPasswordHash VARCHAR(255),
+    @PerformedBy NVARCHAR(100) = N'Admin'
 AS
 BEGIN
     SET NOCOUNT ON;
     UPDATE Users 
     SET PasswordHash = @NewPasswordHash 
     WHERE UserId = @TargetUserId;
+
+    INSERT INTO User_Password_History (UserId, ActionType, PerformedBy)
+    VALUES (@TargetUserId, N'ADMIN_RESET', @PerformedBy);
+END;
+GO
+
+CREATE PROCEDURE sp_User_GetPasswordHistory
+    @UserId INT
+AS
+BEGIN
+    SET NOCOUNT ON;
+    SELECT HistoryId, UserId, ActionType, PerformedBy, CreatedAt
+    FROM User_Password_History
+    WHERE UserId = @UserId
+    ORDER BY CreatedAt DESC;
 END;
 GO
 
@@ -252,9 +284,32 @@ CREATE PROCEDURE sp_User_GetList
 AS
 BEGIN
     SET NOCOUNT ON;
-    SELECT U.UserId, U.Username, U.FullName, U.RoleId, R.RoleName, U.IsActive, U.Permissions, U.CreatedAt
+    SELECT U.UserId, U.Username, U.FullName, U.Email, U.RoleId, R.RoleName, U.IsActive, U.Permissions, U.CreatedAt
     FROM Users U
     INNER JOIN Roles R ON U.RoleId = R.RoleId;
+END;
+GO
+
+CREATE PROCEDURE sp_User_Create
+    @Username VARCHAR(50),
+    @PasswordHash VARCHAR(255),
+    @FullName NVARCHAR(100),
+    @Email VARCHAR(100) = NULL,
+    @RoleId INT = 2,
+    @Permissions INT = 7
+AS
+BEGIN
+    SET NOCOUNT ON;
+    IF EXISTS (SELECT 1 FROM Users WHERE LOWER(Username) = LOWER(@Username))
+    BEGIN
+        RAISERROR(N'Tên đăng nhập đã tồn tại trong hệ thống!', 16, 1);
+        RETURN;
+    END;
+
+    INSERT INTO Users (Username, PasswordHash, FullName, Email, RoleId, Permissions)
+    VALUES (@Username, @PasswordHash, @FullName, @Email, @RoleId, @Permissions);
+
+    SELECT SCOPE_IDENTITY() AS NewUserId;
 END;
 GO
 
@@ -327,12 +382,13 @@ CREATE PROCEDURE sp_Material_Insert
     @MaterialName NVARCHAR(150),
     @Unit NVARCHAR(30),
     @MinRequiredQuantity INT,
-    @CategoryId INT
+    @CategoryId INT,
+    @ExpiryDate DATE = NULL
 AS
 BEGIN
     SET NOCOUNT ON;
-    INSERT INTO Materials (MaterialCode, MaterialName, Unit, StockQuantity, MinRequiredQuantity, CategoryId)
-    VALUES (@MaterialCode, @MaterialName, @Unit, 0, @MinRequiredQuantity, @CategoryId);
+    INSERT INTO Materials (MaterialCode, MaterialName, Unit, StockQuantity, MinRequiredQuantity, CategoryId, ExpiryDate)
+    VALUES (@MaterialCode, @MaterialName, @Unit, 0, @MinRequiredQuantity, @CategoryId, @ExpiryDate);
 END;
 GO
 
@@ -341,12 +397,14 @@ CREATE PROCEDURE sp_Material_Update
     @MaterialName NVARCHAR(150),
     @Unit NVARCHAR(30),
     @MinRequiredQuantity INT,
-    @CategoryId INT
+    @CategoryId INT,
+    @ExpiryDate DATE = NULL
 AS
 BEGIN
     SET NOCOUNT ON;
     UPDATE Materials 
-    SET MaterialName = @MaterialName, Unit = @Unit, MinRequiredQuantity = @MinRequiredQuantity, CategoryId = @CategoryId
+    SET MaterialName = @MaterialName, Unit = @Unit, MinRequiredQuantity = @MinRequiredQuantity,
+        CategoryId = @CategoryId, ExpiryDate = @ExpiryDate
     WHERE MaterialId = @MaterialId;
 END;
 GO
@@ -378,7 +436,7 @@ CREATE PROCEDURE sp_Material_GetList
 AS
 BEGIN
     SET NOCOUNT ON;
-    SELECT M.MaterialId, M.MaterialCode, M.MaterialName, M.Unit, M.StockQuantity, M.MinRequiredQuantity, M.CategoryId, C.CategoryName, M.IsActive
+    SELECT M.MaterialId, M.MaterialCode, M.MaterialName, M.Unit, M.StockQuantity, M.MinRequiredQuantity, M.CategoryId, M.ExpiryDate, C.CategoryName, M.IsActive
     FROM Materials M
     INNER JOIN Categories C ON M.CategoryId = C.CategoryId
     WHERE (@CategoryId IS NULL OR M.CategoryId = @CategoryId)
@@ -403,8 +461,11 @@ GO
 -- MODULE 4: INVENTORY-GRN MODULE PROCEDURES (LẬP PHIẾU NHẬP KHO)
 CREATE PROCEDURE sp_GRN_Create
     @GRN_Code VARCHAR(50),
-    @SupplierId INT,
+    @SupplierId INT = NULL,
+    @DepartmentId INT = NULL,
     @UserId INT,
+    @ReceiptType VARCHAR(20) = 'NCC',
+    @Note NVARCHAR(255) = NULL,
     @Details Type_GRN_Detail_List READONLY
 AS
 BEGIN
@@ -413,8 +474,8 @@ BEGIN
         BEGIN TRANSACTION;
 
         -- Khởi tạo Master Phiếu nhập
-        INSERT INTO GoodsReceiptNotes (GRN_Code, SupplierId, UserId, ReceivedDate)
-        VALUES (@GRN_Code, @SupplierId, @UserId, GETDATE());
+        INSERT INTO GoodsReceiptNotes (GRN_Code, SupplierId, DepartmentId, UserId, ReceivedDate, ReceiptType, Note)
+        VALUES (@GRN_Code, @SupplierId, @DepartmentId, @UserId, GETDATE(), @ReceiptType, @Note);
 
         DECLARE @GRN_Id INT = SCOPE_IDENTITY();
 
@@ -444,12 +505,13 @@ AS
 BEGIN
     SET NOCOUNT ON;
     SELECT 
-        G.GRN_Id, G.GRN_Code, G.ReceivedDate,
-        S.SupplierName, U.FullName AS StaffName,
+        G.GRN_Id, G.GRN_Code, G.ReceivedDate, G.ReceiptType, G.Note,
+        S.SupplierName, Dep.DepartmentName, U.FullName AS StaffName,
         D.MaterialId, M.MaterialCode, M.MaterialName, M.Unit,
         D.Quantity, D.UnitPrice, (D.Quantity * D.UnitPrice) AS TotalPrice
     FROM GoodsReceiptNotes G
-    INNER JOIN Suppliers S ON G.SupplierId = S.SupplierId
+    LEFT JOIN Suppliers S ON G.SupplierId = S.SupplierId
+    LEFT JOIN Departments Dep ON G.DepartmentId = Dep.DepartmentId
     INNER JOIN Users U ON G.UserId = U.UserId
     INNER JOIN GRN_Details D ON G.GRN_Id = D.GRN_Id
     INNER JOIN Materials M ON D.MaterialId = M.MaterialId
@@ -675,5 +737,178 @@ BEGIN
       AND M.StockQuantity > 0 -- Có giữ lượng hàng tồn trong kho
       AND ISNULL(SumOut.Qty, 0) <= (M.StockQuantity * 0.05) -- Lượng tiêu thụ 90 ngày nhỏ hơn hoặc bằng 5% lượng tồn đọng hiện tại
     ORDER BY M.StockQuantity DESC;
+END;
+GO
+
+-- ============================================================================
+-- SP: sp_Material_GetExpiringSoon
+-- Lấy danh sách vật tư sắp hết hạn trong vòng @DaysAhead ngày (mặc định 30)
+-- ============================================================================
+CREATE OR ALTER PROCEDURE sp_Material_GetExpiringSoon
+    @DaysAhead INT = 30,
+    @TopN      INT = 10
+AS
+BEGIN
+    SET NOCOUNT ON;
+    SELECT TOP (@TopN)
+        m.MaterialId,
+        m.MaterialCode,
+        m.MaterialName,
+        m.Unit,
+        m.StockQuantity,
+        m.ExpiryDate,
+        c.CategoryName,
+        DATEDIFF(DAY, GETDATE(), m.ExpiryDate) AS DaysRemaining
+    FROM Materials m
+    INNER JOIN Categories c ON m.CategoryId = c.CategoryId
+    WHERE m.IsActive = 1
+      AND m.ExpiryDate IS NOT NULL
+      AND m.ExpiryDate >= CAST(GETDATE() AS DATE)
+      AND m.ExpiryDate <= DATEADD(DAY, @DaysAhead, CAST(GETDATE() AS DATE))
+    ORDER BY m.ExpiryDate ASC;
+END;
+GO
+
+-- ============================================================================
+-- MODULE 8: REPORTS (BÁO CÁO NHẬP - XUẤT - TỒN THEO THỜI GIAN)
+-- ============================================================================
+
+CREATE OR ALTER PROCEDURE sp_Report_GetInventorySummary
+    @FromDate DATETIME,
+    @ToDate DATETIME,
+    @CategoryId INT = NULL,
+    @Keyword NVARCHAR(100) = NULL
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    SELECT 
+        M.MaterialId,
+        M.MaterialCode,
+        M.MaterialName,
+        M.Unit,
+        C.CategoryName,
+        
+        -- Tồn đầu kỳ
+        ISNULL((
+            SELECT SUM(D.Quantity) 
+            FROM GRN_Details D 
+            INNER JOIN GoodsReceiptNotes G ON D.GRN_Id = G.GRN_Id
+            WHERE D.MaterialId = M.MaterialId AND G.ReceivedDate < @FromDate
+        ), 0) - ISNULL((
+            SELECT SUM(D.Quantity) 
+            FROM GDN_Details D 
+            INNER JOIN GoodsDeliveryNotes G ON D.GDN_Id = G.GDN_Id
+            WHERE D.MaterialId = M.MaterialId AND G.DeliveryDate < @FromDate
+        ), 0) AS OpeningStock,
+
+        -- Tổng nhập trong kỳ
+        ISNULL((
+            SELECT SUM(D.Quantity) 
+            FROM GRN_Details D 
+            INNER JOIN GoodsReceiptNotes G ON D.GRN_Id = G.GRN_Id
+            WHERE D.MaterialId = M.MaterialId AND G.ReceivedDate BETWEEN @FromDate AND @ToDate
+        ), 0) AS TotalImport,
+
+        -- Giá trị nhập trong kỳ
+        ISNULL((
+            SELECT SUM(D.Quantity * D.UnitPrice) 
+            FROM GRN_Details D 
+            INNER JOIN GoodsReceiptNotes G ON D.GRN_Id = G.GRN_Id
+            WHERE D.MaterialId = M.MaterialId AND G.ReceivedDate BETWEEN @FromDate AND @ToDate
+        ), 0) AS TotalImportValue,
+
+        -- Tổng xuất trong kỳ
+        ISNULL((
+            SELECT SUM(D.Quantity) 
+            FROM GDN_Details D 
+            INNER JOIN GoodsDeliveryNotes G ON D.GDN_Id = G.GDN_Id
+            WHERE D.MaterialId = M.MaterialId AND G.DeliveryDate BETWEEN @FromDate AND @ToDate
+        ), 0) AS TotalExport,
+
+        -- Tồn cuối kỳ
+        M.StockQuantity AS ClosingStock,
+
+        -- Đơn giá tham chiếu (Lần nhập gần nhất)
+        ISNULL((
+            SELECT TOP 1 D.UnitPrice 
+            FROM GRN_Details D 
+            INNER JOIN GoodsReceiptNotes G ON D.GRN_Id = G.GRN_Id 
+            WHERE D.MaterialId = M.MaterialId 
+            ORDER BY G.ReceivedDate DESC
+        ), 0) AS LastUnitPrice
+
+    FROM Materials M
+    INNER JOIN Categories C ON M.CategoryId = C.CategoryId
+    WHERE M.IsActive = 1
+      AND (@CategoryId IS NULL OR M.CategoryId = @CategoryId)
+      AND (@Keyword IS NULL OR LOWER(M.MaterialName) LIKE N'%' + LOWER(@Keyword) + '%' OR LOWER(M.MaterialCode) LIKE '%' + LOWER(@Keyword) + '%')
+    ORDER BY C.CategoryName, M.MaterialName;
+END;
+GO
+
+CREATE OR ALTER PROCEDURE sp_Report_GetInboundDetails
+    @FromDate DATETIME,
+    @ToDate DATETIME,
+    @CategoryId INT = NULL
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    SELECT 
+        G.GRN_Code,
+        G.ReceivedDate,
+        G.ReceiptType,
+        G.Note,
+        ISNULL(S.SupplierName, Dep.DepartmentName) AS SourceName,
+        U.FullName AS StaffName,
+        M.MaterialCode,
+        M.MaterialName,
+        M.Unit,
+        C.CategoryName,
+        D.Quantity,
+        D.UnitPrice,
+        (D.Quantity * D.UnitPrice) AS TotalAmount
+    FROM GRN_Details D
+    INNER JOIN GoodsReceiptNotes G ON D.GRN_Id = G.GRN_Id
+    INNER JOIN Materials M ON D.MaterialId = M.MaterialId
+    INNER JOIN Categories C ON M.CategoryId = C.CategoryId
+    INNER JOIN Users U ON G.UserId = U.UserId
+    LEFT JOIN Suppliers S ON G.SupplierId = S.SupplierId
+    LEFT JOIN Departments Dep ON G.DepartmentId = Dep.DepartmentId
+    WHERE G.ReceivedDate BETWEEN @FromDate AND @ToDate
+      AND (@CategoryId IS NULL OR M.CategoryId = @CategoryId)
+    ORDER BY G.ReceivedDate DESC, G.GRN_Code;
+END;
+GO
+
+CREATE OR ALTER PROCEDURE sp_Report_GetOutboundDetails
+    @FromDate DATETIME,
+    @ToDate DATETIME,
+    @CategoryId INT = NULL
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    SELECT 
+        G.GDN_Code,
+        G.DeliveryDate,
+        Dep.DepartmentName,
+        G.Reason,
+        U.FullName AS StaffName,
+        M.MaterialCode,
+        M.MaterialName,
+        M.Unit,
+        C.CategoryName,
+        D.Quantity
+    FROM GDN_Details D
+    INNER JOIN GoodsDeliveryNotes G ON D.GDN_Id = G.GDN_Id
+    INNER JOIN Materials M ON D.MaterialId = M.MaterialId
+    INNER JOIN Categories C ON M.CategoryId = C.CategoryId
+    INNER JOIN Users U ON G.UserId = U.UserId
+    INNER JOIN Departments Dep ON G.DepartmentId = Dep.DepartmentId
+    WHERE G.DeliveryDate BETWEEN @FromDate AND @ToDate
+      AND (@CategoryId IS NULL OR M.CategoryId = @CategoryId)
+    ORDER BY G.DeliveryDate DESC, G.GDN_Code;
 END;
 GO

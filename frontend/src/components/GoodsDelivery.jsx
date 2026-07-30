@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import api from '../api';
-import { Plus, Trash2, Printer, X, Eye, FileText, Package, AlertCircle } from 'lucide-react';
+import { Plus, Trash2, Printer, X, Eye, FileText, Package, AlertCircle, Search } from 'lucide-react';
 
 function MaterialSelect({ value, onChange, materials, placeholder = "-- Chọn vật tư --", showStock = false }) {
   const [isOpen, setIsOpen] = useState(false);
@@ -19,8 +19,9 @@ function MaterialSelect({ value, onChange, materials, placeholder = "-- Chọn v
     const q = search.trim().toLowerCase();
     if (q) {
       result = result.filter(m => 
-        m.TenVatTu.toLowerCase().includes(q) ||
-        m.MaCodeVatTu.toLowerCase().includes(q)
+        (m.TenVatTu && m.TenVatTu.toLowerCase().includes(q)) ||
+        (m.MaCodeVatTu && m.MaCodeVatTu.toLowerCase().includes(q)) ||
+        (m.TenDanhMuc && m.TenDanhMuc.toLowerCase().includes(q))
       );
     }
     if (selectedCat) {
@@ -72,16 +73,28 @@ function MaterialSelect({ value, onChange, materials, placeholder = "-- Chọn v
       </button>
 
       {isOpen && (
-        <div className="absolute z-30 w-full mt-1 bg-white border border-sky-100 rounded-xl shadow-xl p-2 space-y-2 max-h-72 flex flex-col min-w-[280px]">
+        <div className="absolute z-30 w-full mt-1 bg-white border border-sky-100 rounded-xl shadow-xl p-2 space-y-2 max-h-72 flex flex-col min-w-[300px]">
           <div className="flex gap-1.5 shrink-0">
-            <input
-              type="text"
-              autoFocus
-              placeholder="Tìm tên hoặc mã..."
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              className="flex-1 bg-slate-50 border border-sky-100 rounded-lg px-2.5 py-1.5 text-xs text-slate-800 focus:outline-none focus:border-sky-500 focus:bg-white transition-all placeholder:text-slate-400 min-w-0"
-            />
+            <div className="relative flex-1 min-w-0">
+              <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+              <input
+                type="text"
+                autoFocus
+                placeholder="Tìm theo tên, mã code vật tư..."
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                className="w-full bg-slate-50 border border-sky-100 rounded-lg pl-8 pr-7 py-1.5 text-xs text-slate-800 focus:outline-none focus:border-sky-500 focus:bg-white transition-all placeholder:text-slate-400"
+              />
+              {search && (
+                <button
+                  type="button"
+                  onClick={() => setSearch('')}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                >
+                  <X size={12} />
+                </button>
+              )}
+            </div>
             <select
               value={selectedCat}
               onChange={(e) => setSelectedCat(e.target.value)}
@@ -95,7 +108,7 @@ function MaterialSelect({ value, onChange, materials, placeholder = "-- Chọn v
           </div>
           <div className="overflow-y-auto flex-1 divide-y divide-slate-50">
             {filteredMaterials.length === 0 ? (
-              <div className="text-center py-3 text-[11px] text-slate-400">Không tìm thấy vật tư</div>
+              <div className="text-center py-3 text-[11px] text-slate-400">Không tìm thấy vật tư khớp với từ khóa</div>
             ) : (
               filteredMaterials.map(m => (
                 <button
@@ -132,8 +145,13 @@ export default function GoodsDelivery() {
   const [deliveries, setDeliveries] = useState([]);
   const [materials, setMaterials] = useState([]);
   const [departments, setDepartments] = useState([]);
+  const [categories, setCategories] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+
+  // Quick Search & Filter for Materials in Form
+  const [quickSearch, setQuickSearch] = useState('');
+  const [quickCategory, setQuickCategory] = useState('');
 
   // View states
   const [activeTab, setActiveTab] = useState('list'); // 'list' | 'create'
@@ -146,12 +164,50 @@ export default function GoodsDelivery() {
   const [items, setItems] = useState([{ MaterialId: '', SoLuong: 1 }]);
   const [submitError, setSubmitError] = useState(null);
   const [submitSuccess, setSubmitSuccess] = useState(false);
+  const [historySearch, setHistorySearch] = useState('');
+
+  const filteredDeliveries = React.useMemo(() => {
+    const q = historySearch.trim().toLowerCase();
+    if (!q) return deliveries;
+    return deliveries.filter(d =>
+      (d.SoPhieuXuat && d.SoPhieuXuat.toLowerCase().includes(q)) ||
+      (d.NguoiLap && d.NguoiLap.toLowerCase().includes(q)) ||
+      (d.BoPhanNhan && d.BoPhanNhan.toLowerCase().includes(q)) ||
+      (d.LyDoXuat && d.LyDoXuat.toLowerCase().includes(q))
+    );
+  }, [deliveries, historySearch]);
+
+  const filteredMaterialsForSelect = React.useMemo(() => {
+    let result = materials;
+    const q = quickSearch.trim().toLowerCase();
+    if (q) {
+      result = result.filter(m =>
+        (m.TenVatTu && m.TenVatTu.toLowerCase().includes(q)) ||
+        (m.MaCodeVatTu && m.MaCodeVatTu.toLowerCase().includes(q))
+      );
+    }
+    if (quickCategory) {
+      const catId = parseInt(quickCategory);
+      result = result.filter(m => m.MaDanhMuc === catId);
+    }
+    return result;
+  }, [materials, quickSearch, quickCategory]);
 
   useEffect(() => {
     fetchDeliveries();
     fetchMaterials();
     fetchDepartments();
+    fetchCategories();
   }, []);
+
+  const fetchCategories = async () => {
+    try {
+      const res = await api.get('/categories');
+      setCategories(res.data);
+    } catch (err) {
+      console.error('Lỗi tải danh mục:', err);
+    }
+  };
 
   const fetchDeliveries = async () => {
     try {
@@ -185,7 +241,7 @@ export default function GoodsDelivery() {
   };
 
   const handleAddItemRow = () => {
-    setItems([...items, { MaterialId: '', SoLuong: 1 }]);
+    setItems([...items, { MaterialId: '', SoLuong: 1, CategoryId: '', DonViTinh: '', GhiChu: '' }]);
   };
 
   const handleRemoveItemRow = (index) => {
@@ -196,6 +252,22 @@ export default function GoodsDelivery() {
   const handleItemChange = (index, field, value) => {
     const newItems = [...items];
     newItems[index][field] = value;
+    setItems(newItems);
+  };
+
+  const handleSelectMaterial = (index, materialId) => {
+    const newItems = [...items];
+    const matObj = materials.find(m => String(m.MaVatTu) === String(materialId));
+    if (matObj) {
+      newItems[index].MaterialId = matObj.MaVatTu;
+      newItems[index].DonViTinh = matObj.DonViTinh || '';
+      if (!newItems[index].CategoryId && matObj.MaDanhMuc) {
+        newItems[index].CategoryId = String(matObj.MaDanhMuc);
+      }
+    } else {
+      newItems[index].MaterialId = '';
+      newItems[index].DonViTinh = '';
+    }
     setItems(newItems);
   };
 
@@ -220,7 +292,8 @@ export default function GoodsDelivery() {
         GhiChu: note,
         ChiTiet: items.map(item => ({
           MaterialId: parseInt(item.MaterialId),
-          SoLuong: parseInt(item.SoLuong)
+          SoLuong: parseInt(item.SoLuong),
+          GhiChu: item.GhiChu || ''
         }))
       };
 
@@ -228,7 +301,7 @@ export default function GoodsDelivery() {
       setSubmitSuccess(true);
       setDepartmentId('');
       setNote('');
-      setItems([{ MaterialId: '', SoLuong: 1 }]);
+      setItems([{ MaterialId: '', SoLuong: 1, CategoryId: '', DonViTinh: '', GhiChu: '' }]);
       fetchDeliveries();
       setTimeout(() => {
         setSubmitSuccess(false);
@@ -250,8 +323,130 @@ export default function GoodsDelivery() {
   };
 
   const handlePrint = () => {
-    window.print();
+    if (!selectedDelivery) return;
+
+    const itemsHtml = selectedDelivery.ChiTiet?.map((item, idx) => `
+      <tr>
+        <td style="text-align: center;">${idx + 1}</td>
+        <td style="font-family: monospace; font-weight: bold;">${item.MaCodeVatTu || '—'}</td>
+        <td style="font-weight: bold;">${item.TenVatTu || '—'}</td>
+        <td style="text-align: center;">${item.DonViTinh || '—'}</td>
+        <td style="text-align: right; font-weight: bold; color: #be123c;">${(item.SoLuong || 0).toLocaleString('vi-VN')}</td>
+      </tr>
+    `).join('') || '';
+
+    const totalQty = selectedDelivery.ChiTiet?.reduce((acc, curr) => acc + (curr.SoLuong || 0), 0) || 0;
+
+    const printWindow = window.open('', '_blank', 'width=900,height=800');
+    if (!printWindow) {
+      alert('Vui lòng cho phép trình duyệt mở Cửa sổ Popup để in phiếu.');
+      return;
+    }
+
+    printWindow.document.write(`
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <title>In Phiếu Xuất Kho - ${selectedDelivery.SoPhieuXuat}</title>
+          <meta charset="utf-8" />
+          <style>
+            @page { size: A4; margin: 15mm; }
+            body { font-family: Arial, Helvetica, sans-serif; color: #0f172a; margin: 0; padding: 20px; line-height: 1.4; }
+            .header-table { width: 100%; border-collapse: collapse; margin-bottom: 20px; border-bottom: 2px solid #0f172a; padding-bottom: 10px; }
+            .company-title { font-size: 16pt; font-weight: bold; text-transform: uppercase; color: #0f172a; }
+            .company-sub { font-size: 9pt; color: #475569; }
+            .doc-title { text-align: center; margin: 20px 0 15px 0; }
+            .doc-title h2 { margin: 0; font-size: 18pt; text-transform: uppercase; color: #0f172a; letter-spacing: 0.5px; }
+            .doc-title p { margin: 4px 0 0 0; font-size: 10pt; color: #475569; }
+            .meta-grid { width: 100%; margin-bottom: 20px; font-size: 10pt; border-collapse: collapse; }
+            .meta-grid td { padding: 4px 0; vertical-align: top; }
+            table.data-table { width: 100%; border-collapse: collapse; margin-bottom: 25px; font-size: 10pt; }
+            table.data-table th, table.data-table td { border: 1px solid #cbd5e1; padding: 8px 10px; }
+            table.data-table th { background-color: #f1f5f9; color: #0f172a; font-weight: bold; text-transform: uppercase; font-size: 9pt; text-align: left; }
+            .signatures-table { width: 100%; border-collapse: collapse; margin-top: 40px; font-size: 10pt; text-align: center; }
+            .signatures-table td { width: 50%; vertical-align: top; padding: 0 10px; }
+            .sig-title { font-weight: bold; margin-bottom: 4px; text-transform: uppercase; }
+            .sig-sub { font-size: 8.5pt; color: #64748b; font-style: italic; }
+            .sig-space { height: 75px; }
+          </style>
+        </head>
+        <body>
+          <table class="header-table">
+            <tr>
+              <td>
+                <div class="company-title">NOVA SPHERE HOTEL</div>
+                <div class="company-sub">Đường Lê Lợi, Phường Bến Nghé, Quận 1, TP. Hồ Chí Minh</div>
+                <div class="company-sub">Hệ thống Quản lý Vật tư & Cơ sở vật chất Khách sạn</div>
+              </td>
+            </tr>
+          </table>
+
+          <div class="doc-title">
+            <h2>PHIẾU XUẤT KHO VẬT TƯ CẤP PHÁT</h2>
+            <p><strong>Mã số phiếu:</strong> ${selectedDelivery.SoPhieuXuat} | <strong>Ngày cấp phát:</strong> ${new Date(selectedDelivery.NgayXuat).toLocaleString('vi-VN')}</p>
+          </div>
+
+          <table class="meta-grid">
+            <tr>
+              <td style="width: 50%;"><strong>Bộ phận nhận vật tư:</strong> ${selectedDelivery.BoPhanNhan || '—'}</td>
+              <td style="width: 50%; text-align: right;"><strong>Người lập yêu cầu:</strong> ${selectedDelivery.NguoiYeuCau || '—'}</td>
+            </tr>
+            <tr>
+              <td><strong>Lý do xuất kho:</strong> ${selectedDelivery.GhiChu || '—'}</td>
+              <td style="text-align: right;"><strong>Ngày in phiếu:</strong> ${new Date().toLocaleString('vi-VN')}</td>
+            </tr>
+          </table>
+
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th style="width: 40px; text-align: center;">STT</th>
+                <th style="width: 120px;">Mã code</th>
+                <th>Tên vật tư</th>
+                <th style="width: 90px; text-align: center;">ĐVT</th>
+                <th style="width: 110px; text-align: right;">Số lượng xuất</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${itemsHtml}
+              <tr style="font-weight: bold; background-color: #f8fafc;">
+                <td colspan="4" style="text-align: right;">TỔNG SỐ LƯỢNG XUẤT:</td>
+                <td style="text-align: right; color: #be123c; font-size: 12pt;">${totalQty.toLocaleString('vi-VN')}</td>
+              </tr>
+            </tbody>
+          </table>
+
+          <table class="signatures-table">
+            <tr>
+              <td>
+                <div class="sig-title">Người Lập Yêu Cầu / Người Nhận</div>
+                <div class="sig-sub">(Ký và ghi rõ họ tên)</div>
+                <div class="sig-space"></div>
+                <div style="font-weight: bold;">${selectedDelivery.NguoiYeuCau || '—'}</div>
+              </td>
+              <td>
+                <div class="sig-title">Thủ Kho Xuất Hàng</div>
+                <div class="sig-sub">(Ký và ghi rõ họ tên)</div>
+                <div class="sig-space"></div>
+                <div>........................................................</div>
+              </td>
+            </tr>
+          </table>
+
+          <script>
+            window.onload = function() {
+              window.focus();
+              window.print();
+              setTimeout(function() { window.close(); }, 500);
+            };
+          </script>
+        </body>
+      </html>
+    `);
+    printWindow.document.close();
   };
+
+  const totalExportQty = items.reduce((acc, curr) => acc + (parseInt(curr.SoLuong) || 0), 0);
 
   return (
     <div className="bg-white border border-sky-100 p-6 rounded-2xl shadow-sm relative text-slate-800">
@@ -287,7 +482,27 @@ export default function GoodsDelivery() {
 
       {/* 1. TAB LIST */}
       {activeTab === 'list' && (
-        <div className="no-print">
+        <div className="no-print space-y-4">
+          <div className="relative max-w-md">
+            <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+            <input
+              type="text"
+              placeholder="Tìm theo số phiếu, người lập, bộ phận nhận..."
+              value={historySearch}
+              onChange={(e) => setHistorySearch(e.target.value)}
+              className="w-full bg-slate-50 border border-sky-100 rounded-xl pl-9 pr-8 py-2 text-xs text-slate-800 focus:outline-none focus:border-sky-500 focus:bg-white transition-all placeholder:text-slate-400"
+            />
+            {historySearch && (
+              <button
+                type="button"
+                onClick={() => setHistorySearch('')}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+              >
+                <X size={14} />
+              </button>
+            )}
+          </div>
+
           {error ? (
             <div className="text-red-650 bg-red-50 p-4 rounded-xl border border-red-100 text-sm">
               {error}
@@ -296,15 +511,15 @@ export default function GoodsDelivery() {
             <div className="flex items-center justify-center py-12">
               <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-sky-600"></div>
             </div>
-          ) : deliveries.length === 0 ? (
+          ) : filteredDeliveries.length === 0 ? (
             <div className="text-center py-12 text-slate-400 text-sm">
               Không tìm thấy phiếu xuất kho nào.
             </div>
           ) : (
-            <div className="overflow-x-auto">
+            <div className="overflow-x-auto border border-sky-100 rounded-xl">
               <table className="w-full text-left text-sm border-collapse">
                 <thead>
-                  <tr className="border-b border-sky-100 text-slate-500 bg-sky-50/20">
+                  <tr className="border-b border-sky-100 text-slate-600 bg-sky-50/50 font-bold">
                     <th className="py-3 px-4 font-bold">Số phiếu xuất</th>
                     <th className="py-3 px-4 font-bold">Ngày xuất</th>
                     <th className="py-3 px-4 font-bold">Bộ phận nhận</th>
@@ -314,17 +529,17 @@ export default function GoodsDelivery() {
                   </tr>
                 </thead>
                 <tbody>
-                  {deliveries.map((d) => (
-                    <tr key={d.MaPhieuXuat} className="border-b border-sky-50 hover:bg-sky-50/10 transition-all">
-                      <td className="py-3.5 px-4 font-semibold text-slate-700">{d.SoPhieuXuat}</td>
-                      <td className="py-3.5 px-4 text-slate-500">{new Date(d.NgayXuat).toLocaleString()}</td>
-                      <td className="py-3.5 px-4 text-slate-700 font-semibold">{d.BoPhanNhan}</td>
-                      <td className="py-3.5 px-4 text-slate-600">{d.NguoiYeuCau}</td>
-                      <td className="py-3.5 px-4 text-slate-500 truncate max-w-xs">{d.GhiChu || '—'}</td>
-                      <td className="py-3.5 px-4 text-right">
+                  {filteredDeliveries.map((d) => (
+                    <tr key={d.MaPhieuXuat} className="border-b border-sky-50 hover:bg-sky-50/20 transition-all h-12">
+                      <td className="py-3 px-4 font-semibold text-rose-700 font-mono align-middle">{d.SoPhieuXuat}</td>
+                      <td className="py-3 px-4 text-slate-500 align-middle">{new Date(d.NgayXuat).toLocaleString('vi-VN')}</td>
+                      <td className="py-3 px-4 text-slate-800 font-bold align-middle">{d.BoPhanNhan}</td>
+                      <td className="py-3 px-4 text-slate-600 align-middle">{d.NguoiYeuCau}</td>
+                      <td className="py-3 px-4 text-slate-500 truncate max-w-xs align-middle">{d.GhiChu || '—'}</td>
+                      <td className="py-3 px-4 text-right align-middle">
                         <button
                           onClick={() => handleOpenDetail(d.MaPhieuXuat)}
-                          className="flex items-center justify-center gap-1.5 px-3 py-1.5 bg-white hover:bg-sky-50 text-slate-500 hover:text-sky-600 rounded-lg border border-sky-100 text-xs font-semibold ml-auto transition-all"
+                          className="flex items-center justify-center gap-1.5 px-3 py-1.5 bg-white hover:bg-sky-50 text-slate-600 hover:text-sky-600 rounded-lg border border-sky-150 text-xs font-semibold ml-auto transition-all"
                         >
                           <Eye size={14} /> Chi tiết
                         </button>
@@ -380,60 +595,128 @@ export default function GoodsDelivery() {
             </div>
           </div>
 
-          <div className="space-y-4">
-            <div className="flex justify-between items-center border-b border-sky-100 pb-2">
-              <h3 className="text-sm font-semibold text-slate-700">Danh sách vật tư xuất</h3>
+          <div className="space-y-4 pt-3">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-bold text-rose-700 uppercase tracking-wide">CHI TIẾT PHIẾU XUẤT KHO CẤP PHÁT</h3>
+            </div>
+
+            <div className="overflow-x-auto border border-blue-200 rounded-xl shadow-sm">
+              <table className="w-full text-left text-sm border-collapse">
+                <thead>
+                  <tr className="bg-blue-100/90 text-blue-950 border-b border-blue-200 font-bold">
+                    <th className="py-3 px-3 text-center border-r border-blue-200 w-12">STT</th>
+                    <th className="py-3 px-4 border-r border-blue-200 w-44">Loại vật tư *</th>
+                    <th className="py-3 px-4 border-r border-blue-200 min-w-[280px]">Hàng hóa (Tên vật tư)</th>
+                    <th className="py-3 px-3 border-r border-blue-200 w-28 text-center">Đơn vị tính</th>
+                    <th className="py-3 px-3 border-r border-blue-200 w-32 text-right">Số lượng *</th>
+                    <th className="py-3 px-3 border-r border-blue-200 min-w-[150px]">Ghi chú</th>
+                    <th className="py-3 px-3 text-center w-14">Hành động</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {items.map((item, index) => {
+                    const rowMaterials = item.CategoryId 
+                      ? materials.filter(m => String(m.MaDanhMuc) === String(item.CategoryId))
+                      : materials;
+
+                    return (
+                      <tr key={index} className="border-b border-slate-200 hover:bg-sky-50/20 transition-all h-14">
+                        {/* STT */}
+                        <td className="px-3 text-center border-r border-slate-200 font-semibold text-slate-600 align-middle">
+                          {index + 1}
+                        </td>
+
+                        {/* Loại vật tư */}
+                        <td className="px-2.5 border-r border-slate-200 align-middle">
+                          <select
+                            value={item.CategoryId || ''}
+                            onChange={(e) => {
+                              handleItemChange(index, 'CategoryId', e.target.value);
+                              if (e.target.value && item.MaterialId) {
+                                const exists = materials.some(m => String(m.MaVatTu) === String(item.MaterialId) && String(m.MaDanhMuc) === String(e.target.value));
+                                if (!exists) handleSelectMaterial(index, '');
+                              }
+                            }}
+                            className="w-full bg-white border border-slate-300 rounded-lg px-2.5 text-xs text-slate-800 focus:outline-none focus:border-sky-500 font-medium h-10"
+                          >
+                            <option value="">-- Tất cả loại --</option>
+                            {categories.map(c => (
+                              <option key={c.MaDanhMuc} value={c.MaDanhMuc}>{c.TenDanhMuc}</option>
+                            ))}
+                          </select>
+                        </td>
+
+                        {/* Hàng hóa */}
+                        <td className="px-2.5 border-r border-slate-200 align-middle">
+                          <MaterialSelect
+                            value={item.MaterialId}
+                            onChange={(val) => handleSelectMaterial(index, val)}
+                            materials={rowMaterials}
+                            placeholder="— Lựa chọn vật tư xuất —"
+                            showStock={true}
+                          />
+                        </td>
+
+                        {/* Đơn vị tính */}
+                        <td className="px-3 border-r border-slate-200 text-center text-slate-700 font-medium bg-slate-50/40 text-xs align-middle">
+                          {item.DonViTinh || (materials.find(m => String(m.MaVatTu) === String(item.MaterialId))?.DonViTinh) || '—'}
+                        </td>
+
+                        {/* Số lượng */}
+                        <td className="px-2.5 border-r border-slate-200 align-middle">
+                          <input
+                            type="number"
+                            required
+                            min="1"
+                            placeholder="0"
+                            value={item.SoLuong}
+                            onChange={(e) => handleItemChange(index, 'SoLuong', e.target.value)}
+                            className="w-full bg-white border border-slate-300 rounded-lg px-3 text-sm text-slate-800 focus:outline-none focus:border-sky-500 text-right font-semibold h-10"
+                          />
+                        </td>
+
+                        {/* Ghi chú */}
+                        <td className="px-2.5 border-r border-slate-200 align-middle">
+                          <input
+                            type="text"
+                            placeholder="Ghi chú..."
+                            value={item.GhiChu || ''}
+                            onChange={(e) => handleItemChange(index, 'GhiChu', e.target.value)}
+                            className="w-full bg-white border border-slate-300 rounded-lg px-3 text-xs text-slate-800 focus:outline-none focus:border-sky-500 h-10"
+                          />
+                        </td>
+
+                        {/* Hành động */}
+                        <td className="px-2 text-center align-middle">
+                          <button
+                            type="button"
+                            disabled={items.length === 1}
+                            onClick={() => handleRemoveItemRow(index)}
+                            className="p-2 bg-white border border-rose-200 hover:bg-rose-50 text-rose-500 rounded-lg disabled:opacity-30 disabled:pointer-events-none transition-all"
+                            title="Xóa dòng"
+                          >
+                            <Trash2 size={16} />
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Thêm hàng hóa & Tổng số lượng */}
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-4 pt-3">
+              <div className="text-sm font-semibold text-slate-700">
+                Tổng số lượng xuất: <span className="text-rose-600 text-lg font-extrabold ml-1.5">{totalExportQty.toLocaleString()}</span>
+              </div>
               <button
                 type="button"
                 onClick={handleAddItemRow}
-                className="flex items-center gap-1 text-xs text-sky-600 hover:text-sky-700 font-semibold transition-all"
+                className="flex items-center gap-1.5 px-5 py-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold transition-all shadow-md shadow-rose-500/20"
               >
-                <Plus size={14} /> Thêm dòng
+                <Plus size={16} /> Thêm hàng hóa
               </button>
-            </div>
-
-            <div className="space-y-3">
-              {items.map((item, index) => (
-                <div key={index} className="grid grid-cols-1 md:grid-cols-12 gap-3 items-end bg-slate-50/50 p-3 border border-sky-100 rounded-xl">
-                  {/* Vật tư */}
-                  <div className="md:col-span-8">
-                    <label className="block text-[10px] font-semibold text-slate-400 mb-1">VẬT TƯ *</label>
-                    <MaterialSelect
-                      value={item.MaterialId}
-                      onChange={(val) => handleItemChange(index, 'MaterialId', val)}
-                      materials={materials}
-                      placeholder="-- Chọn vật tư cần xuất --"
-                      showStock={true}
-                    />
-                  </div>
-
-                  {/* Số lượng */}
-                  <div className="md:col-span-3">
-                    <label className="block text-[10px] font-semibold text-slate-400 mb-1">SỐ LƯỢNG XUẤT *</label>
-                    <input
-                      type="number"
-                      required
-                      min="1"
-                      placeholder="0"
-                      value={item.SoLuong}
-                      onChange={(e) => handleItemChange(index, 'SoLuong', e.target.value)}
-                      className="w-full bg-white border border-sky-150 rounded-lg px-3 py-2 text-xs text-slate-800 focus:outline-none focus:border-sky-500 transition-all text-right"
-                    />
-                  </div>
-
-                  {/* Thao tác xóa */}
-                  <div className="md:col-span-1 text-center md:pb-1">
-                    <button
-                      type="button"
-                      disabled={items.length === 1}
-                      onClick={() => handleRemoveItemRow(index)}
-                      className="p-2 bg-white border border-sky-150 hover:bg-red-50 text-slate-400 hover:text-red-500 rounded-lg disabled:opacity-30 disabled:pointer-events-none transition-all"
-                    >
-                      <Trash2 size={14} />
-                    </button>
-                  </div>
-                </div>
-              ))}
             </div>
           </div>
 
@@ -443,7 +726,7 @@ export default function GoodsDelivery() {
               onClick={() => {
                 setDepartmentId('');
                 setNote('');
-                setItems([{ MaterialId: '', SoLuong: 1 }]);
+                setItems([{ MaterialId: '', SoLuong: 1, CategoryId: '', DonViTinh: '', GhiChu: '' }]);
                 setActiveTab('list');
               }}
               className="px-4 py-2 border border-sky-150 hover:bg-slate-50 text-slate-500 rounded-xl text-sm font-semibold transition-all"
@@ -452,9 +735,9 @@ export default function GoodsDelivery() {
             </button>
             <button
               type="submit"
-              className="px-4 py-2 bg-sky-600 hover:bg-sky-700 text-white rounded-xl text-sm font-semibold transition-all shadow-md shadow-sky-500/10"
+              className="px-5 py-2.5 bg-sky-600 hover:bg-sky-700 text-white rounded-xl text-sm font-bold transition-all shadow-md shadow-sky-500/20"
             >
-              Xuất kho cấp phát
+              Cấp phát xuất kho
             </button>
           </div>
         </form>
@@ -542,7 +825,7 @@ export default function GoodsDelivery() {
       {selectedDelivery && (
         <div className="hidden print:block print-container font-sans text-black p-8">
           <div className="text-center border-b-2 border-black pb-4 mb-6">
-            <h1 className="text-2xl font-bold uppercase">Khách sạn Grand Royal</h1>
+            <h1 className="text-2xl font-bold uppercase">NoVa Sphere Hotel</h1>
             <p className="text-xs">Đường Lê Lợi, Quận 1, TP. Hồ Chí Minh</p>
             <p className="text-xs font-semibold mt-1">HỆ THỐNG QUẢN LÝ VẬT TƯ KHÁCH SẠN</p>
           </div>

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import api from '../api';
-import { Plus, Eye, X, FileText, Check, Clipboard, AlertCircle, Search } from 'lucide-react';
+import { Plus, Eye, X, FileText, Check, Clipboard, AlertCircle, Search, Printer } from 'lucide-react';
 
 export default function Stocktake() {
   const [stocktakes, setStocktakes] = useState([]);
@@ -123,6 +123,140 @@ export default function Stocktake() {
     } catch (err) {
       alert('Không thể tải chi tiết phiếu kiểm kê.');
     }
+  };
+
+  const handlePrint = () => {
+    if (!selectedStocktake) return;
+
+    const itemsHtml = selectedStocktake.ChiTiet?.map((item, idx) => {
+      let diffStr = 'Khớp (0)';
+      let diffColor = '#475569';
+      if (item.CheHLech > 0) {
+        diffStr = `+${item.CheHLech} (Thừa)`;
+        diffColor = '#047857';
+      } else if (item.CheHLech < 0) {
+        diffStr = `${item.CheHLech} (Hao hụt)`;
+        diffColor = '#be123c';
+      }
+
+      return `
+        <tr>
+          <td style="text-align: center;">${idx + 1}</td>
+          <td style="font-family: monospace; font-weight: bold;">${item.MaCodeVatTu || '—'}</td>
+          <td style="font-weight: bold;">${item.TenVatTu || '—'}</td>
+          <td style="text-align: center;">${item.DonViTinh || '—'}</td>
+          <td style="text-align: right; color: #64748b;">${(item.SoLuongHeThong || 0).toLocaleString('vi-VN')}</td>
+          <td style="text-align: right; font-weight: bold;">${(item.SoLuongThucTe || 0).toLocaleString('vi-VN')}</td>
+          <td style="text-align: right; font-weight: bold; color: ${diffColor};">${diffStr}</td>
+        </tr>
+      `;
+    }).join('') || '';
+
+    const printWindow = window.open('', '_blank', 'width=900,height=800');
+    if (!printWindow) {
+      alert('Vui lòng cho phép trình duyệt mở Cửa sổ Popup để in biên bản kiểm kê.');
+      return;
+    }
+
+    printWindow.document.write(`
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <title>In Biên Bản Kiểm Kê Kho - ${selectedStocktake.SoPhieuKiemKe}</title>
+          <meta charset="utf-8" />
+          <style>
+            @page { size: A4; margin: 15mm; }
+            body { font-family: Arial, Helvetica, sans-serif; color: #0f172a; margin: 0; padding: 20px; line-height: 1.4; }
+            .header-table { width: 100%; border-collapse: collapse; margin-bottom: 20px; border-bottom: 2px solid #0f172a; padding-bottom: 10px; }
+            .company-title { font-size: 16pt; font-weight: bold; text-transform: uppercase; color: #0f172a; }
+            .company-sub { font-size: 9pt; color: #475569; }
+            .doc-title { text-align: center; margin: 20px 0 15px 0; }
+            .doc-title h2 { margin: 0; font-size: 18pt; text-transform: uppercase; color: #0f172a; letter-spacing: 0.5px; }
+            .doc-title p { margin: 4px 0 0 0; font-size: 10pt; color: #475569; }
+            .meta-grid { width: 100%; margin-bottom: 20px; font-size: 10pt; border-collapse: collapse; }
+            .meta-grid td { padding: 4px 0; vertical-align: top; }
+            table.data-table { width: 100%; border-collapse: collapse; margin-bottom: 25px; font-size: 10pt; }
+            table.data-table th, table.data-table td { border: 1px solid #cbd5e1; padding: 8px 10px; }
+            table.data-table th { background-color: #f1f5f9; color: #0f172a; font-weight: bold; text-transform: uppercase; font-size: 9pt; text-align: left; }
+            .signatures-table { width: 100%; border-collapse: collapse; margin-top: 40px; font-size: 10pt; text-align: center; }
+            .signatures-table td { width: 50%; vertical-align: top; padding: 0 10px; }
+            .sig-title { font-weight: bold; margin-bottom: 4px; text-transform: uppercase; }
+            .sig-sub { font-size: 8.5pt; color: #64748b; font-style: italic; }
+            .sig-space { height: 75px; }
+          </style>
+        </head>
+        <body>
+          <table class="header-table">
+            <tr>
+              <td>
+                <div class="company-title">NOVA SPHERE HOTEL</div>
+                <div class="company-sub">Đường Lê Lợi, Phường Bến Nghé, Quận 1, TP. Hồ Chí Minh</div>
+                <div class="company-sub">Hệ thống Quản lý Vật tư & Cơ sở vật chất Khách sạn</div>
+              </td>
+            </tr>
+          </table>
+
+          <div class="doc-title">
+            <h2>BIÊN BẢN KIỂM KÊ & ĐIỀU CHỈNH TỒN KHO</h2>
+            <p><strong>Mã số phiếu:</strong> ${selectedStocktake.SoPhieuKiemKe} | <strong>Ngày kiểm kê:</strong> ${new Date(selectedStocktake.NgayKiemKe).toLocaleString('vi-VN')}</p>
+          </div>
+
+          <table class="meta-grid">
+            <tr>
+              <td style="width: 50%;"><strong>Nhân viên kiểm kho:</strong> ${selectedStocktake.NguoiLap || '—'}</td>
+              <td style="width: 50%; text-align: right;"><strong>Mô tả / Ghi chú đợt kiểm:</strong> ${selectedStocktake.GhiChu || '—'}</td>
+            </tr>
+            <tr>
+              <td><strong>Trạng thái:</strong> Đã chốt số liệu & tự động điều chỉnh tồn kho</td>
+              <td style="text-align: right;"><strong>Ngày in chứng từ:</strong> ${new Date().toLocaleString('vi-VN')}</td>
+            </tr>
+          </table>
+
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th style="width: 40px; text-align: center;">STT</th>
+                <th style="width: 110px;">Mã code</th>
+                <th>Tên vật tư</th>
+                <th style="width: 70px; text-align: center;">ĐVT</th>
+                <th style="width: 100px; text-align: right;">Tồn hệ thống</th>
+                <th style="width: 110px; text-align: right;">Tồn thực tế</th>
+                <th style="width: 120px; text-align: right;">Chênh lệch</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${itemsHtml}
+            </tbody>
+          </table>
+
+          <table class="signatures-table">
+            <tr>
+              <td>
+                <div class="sig-title">Thủ Kho / Người Kiểm Đếm</div>
+                <div class="sig-sub">(Ký và ghi rõ họ tên)</div>
+                <div class="sig-space"></div>
+                <div style="font-weight: bold;">${selectedStocktake.NguoiLap || '—'}</div>
+              </td>
+              <td>
+                <div class="sig-title">Đại Diện BGD / Kế Toán Trưởng</div>
+                <div class="sig-sub">(Ký và ghi rõ họ tên)</div>
+                <div class="sig-space"></div>
+                <div>........................................................</div>
+              </td>
+            </tr>
+          </table>
+
+          <script>
+            window.onload = function() {
+              window.focus();
+              window.print();
+              setTimeout(function() { window.close(); }, 500);
+            };
+          </script>
+        </body>
+      </html>
+    `);
+    printWindow.document.close();
   };
 
   // Filtered & Sorted items
@@ -452,12 +586,20 @@ export default function Stocktake() {
                 <Clipboard size={18} className="text-sky-600" />
                 Chi tiết phiếu kiểm kê
               </h3>
-              <button 
-                onClick={() => setIsDetailModalOpen(false)}
-                className="text-slate-400 hover:text-slate-705 transition-all"
-              >
-                <X size={20} />
-              </button>
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={handlePrint}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-sky-600 hover:bg-sky-700 text-white rounded-lg text-xs font-semibold transition-all shadow-md shadow-sky-500/10"
+                >
+                  <Printer size={14} /> In biên bản
+                </button>
+                <button 
+                  onClick={() => setIsDetailModalOpen(false)}
+                  className="text-slate-400 hover:text-slate-705 transition-all"
+                >
+                  <X size={20} />
+                </button>
+              </div>
             </div>
 
             {/* Modal Body */}

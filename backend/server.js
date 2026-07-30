@@ -6,6 +6,8 @@ const { sql, poolPromise } = require('./db');
 const https = require('https');
 require('dotenv').config();
 
+const { sendNewUserCredentials, sendPasswordResetEmail } = require('./utils/emailService');
+
 const app = express();
 const PORT = process.env.PORT || 5000;
 const JWT_SECRET = process.env.JWT_SECRET || 'hotel_material_secret_key_2026';
@@ -237,15 +239,68 @@ app.get('/api/admin/users', authenticateToken, authorizeRoles(1), async (req, re
   }
 });
 
-// Admin Reset Mật khẩu cho User (Cần có quyền Bit 8)
+// Thêm mới tài khoản người dùng
+app.post('/api/admin/users', authenticateToken, authorizeRoles(1), async (req, res) => {
+  const { Username, Password, FullName, Email, RoleId, Permissions } = req.body;
+
+  if (!Username || !Password || !FullName) {
+    return res.status(400).json({ message: 'Vui lòng điền đầy đủ Tên đăng nhập, Mật khẩu và Họ tên.' });
+  }
+
+  if (Password.trim().length < 6) {
+    return res.status(400).json({ message: 'Mật khẩu phải từ 6 ký tự trở lên.' });
+  }
+
+  try {
+    const pool = await poolPromise;
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(Password, salt);
+
+    const userRoleId = RoleId ? parseInt(RoleId) : 2;
+    const userPerms = Permissions !== undefined ? parseInt(Permissions) : (userRoleId === 1 ? 15 : 7);
+    const userEmail = Email ? Email.trim() : null;
+
+    await pool.request()
+      .input('Username', sql.VarChar(50), Username.trim())
+      .input('PasswordHash', sql.VarChar(255), hashedPassword)
+      .input('FullName', sql.NVarChar(100), FullName.trim())
+      .input('Email', sql.VarChar(100), userEmail)
+      .input('RoleId', sql.Int, userRoleId)
+      .input('Permissions', sql.Int, userPerms)
+      .execute('sp_User_Create');
+
+    // Tải tên vai trò để đưa vào email
+    const rolesMap = { 1: 'Quản trị viên', 2: 'Nhân viên kho', 3: 'Nhân viên kỹ thuật' };
+    const roleName = rolesMap[userRoleId] || 'Nhân viên';
+
+    // Tự động gửi Email thông tin tài khoản nếu có cung cấp email
+    let emailStatus = null;
+    if (userEmail) {
+      emailStatus = await sendNewUserCredentials({
+        email: userEmail,
+        username: Username.trim(),
+        password: Password,
+        fullName: FullName.trim(),
+        roleName: roleName
+      });
+    }
+
+    res.json({
+      message: 'Tạo tài khoản người dùng mới thành công!',
+      emailSent: emailStatus?.success || false,
+      emailMessage: emailStatus?.message || null
+    });
+  } catch (error) {
+    console.error('Lỗi tạo người dùng mới:', error);
+    res.status(400).json({ message: error.message || 'Lỗi tạo tài khoản người dùng mới.' });
+  }
+});
+
+// Admin Reset Mật khẩu cho User (Cần có quyền Bit 8) & Gửi email thông báo
 app.post('/api/admin/users/:id/reset-password', authenticateToken, async (req, res) => {
   const { id } = req.params;
   const { newPassword } = req.body;
-  console.log('--- RESET PASSWORD API CALLED ---');
-  console.log('TargetUserId:', id);
-  console.log('req.user:', req.user);
 
-  // Kiểm tra quyền theo Bitfield (Bit 8 = Quyền reset mật khẩu)
   const RESET_PASSWORD_BIT = 8;
   const userPermissions = req.user.permissions !== undefined ? req.user.permissions : (req.user.roleId === 1 ? 15 : 7);
   if (!(userPermissions & RESET_PASSWORD_BIT)) {
@@ -258,17 +313,122 @@ app.post('/api/admin/users/:id/reset-password', authenticateToken, async (req, r
 
   try {
     const pool = await poolPromise;
+
+    // Lấy thông tin user target để gửi email
+    const userRes = await pool.request()
+      .input('TargetUserId', sql.Int, parseInt(id))
+      .query('SELECT Username, FullName, Email FROM Users WHERE UserId = @TargetUserId');
+
+    const targetUser = userRes.recordset[0];
+
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(newPassword, salt);
 
     await pool.request()
       .input('TargetUserId', sql.Int, parseInt(id))
       .input('NewPasswordHash', sql.VarChar(255), hashedPassword)
+      .input('PerformedBy', sql.NVarChar(100), req.user.username ? `Admin (${req.user.username})` : 'Admin')
       .execute('sp_User_ResetPassword');
 
-    res.json({ message: 'Đã đặt lại mật khẩu cho tài khoản thành công!' });
+    // Gửi email thông báo mật khẩu mới nếu user có email
+    let emailStatus = null;
+    if (targetUser && targetUser.Email) {
+      emailStatus = await sendPasswordResetEmail({
+        email: targetUser.Email,
+        username: targetUser.Username,
+        newPassword: newPassword,
+        fullName: targetUser.FullName
+      });
+    }
+
+    res.json({
+      message: 'Đã đặt lại mật khẩu cho tài khoản thành công!',
+      emailSent: emailStatus?.success || false,
+      emailMessage: emailStatus?.message || null
+    });
   } catch (error) {
     res.status(500).json({ message: 'Lỗi khi reset mật khẩu', error: error.message });
+  }
+});
+
+// Lấy lịch sử đổi / reset mật khẩu của một tài khoản (Chỉ dành cho Admin)
+app.get('/api/admin/users/:id/password-history', authenticateToken, authorizeRoles(1), async (req, res) => {
+  const { id } = req.params;
+  try {
+    const pool = await poolPromise;
+    const result = await pool.request()
+      .input('UserId', sql.Int, parseInt(id))
+      .execute('sp_User_GetPasswordHistory');
+
+    res.json(result.recordset);
+  } catch (error) {
+    res.status(500).json({ message: 'Lỗi tải lịch sử đổi mật khẩu', error: error.message });
+  }
+});
+
+// User Quên Mật Khẩu (Tự động gửi email reset mật khẩu mới)
+app.post('/api/auth/forgot-password', async (req, res) => {
+  const { usernameOrEmail } = req.body;
+  if (!usernameOrEmail || !usernameOrEmail.trim()) {
+    return res.status(400).json({ message: 'Vui lòng nhập Tên đăng nhập hoặc Email của bạn.' });
+  }
+
+  try {
+    const pool = await poolPromise;
+    const queryStr = `
+      SELECT UserId, Username, FullName, Email 
+      FROM Users 
+      WHERE (LOWER(Username) = LOWER(@Query) OR LOWER(Email) = LOWER(@Query)) AND IsActive = 1
+    `;
+    const userRes = await pool.request()
+      .input('Query', sql.VarChar(100), usernameOrEmail.trim())
+      .query(queryStr);
+
+    if (userRes.recordset.length === 0) {
+      return res.status(404).json({ message: 'Không tìm thấy tài khoản phù hợp với thông tin đã nhập.' });
+    }
+
+    const user = userRes.recordset[0];
+    if (!user.Email) {
+      return res.status(400).json({ message: 'Tài khoản của bạn chưa đăng ký Email trên hệ thống. Vui lòng liên hệ Admin để được cấp lại mật khẩu.' });
+    }
+
+    // Tạo mật khẩu mới ngẫu nhiên 10 ký tự
+    const uppercase = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+    const lowercase = 'abcdefghijklmnopqrstuvwxyz';
+    const numbers = '0123456789';
+    const specials = '!@#$%^&*';
+    let generatedPassword = uppercase[Math.floor(Math.random() * uppercase.length)] +
+                            lowercase[Math.floor(Math.random() * lowercase.length)] +
+                            numbers[Math.floor(Math.random() * numbers.length)] +
+                            specials[Math.floor(Math.random() * specials.length)];
+    const all = uppercase + lowercase + numbers + specials;
+    for (let i = 4; i < 10; i++) {
+      generatedPassword += all[Math.floor(Math.random() * all.length)];
+    }
+
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(generatedPassword, salt);
+
+    await pool.request()
+      .input('TargetUserId', sql.Int, user.UserId)
+      .input('NewPasswordHash', sql.VarChar(255), hashedPassword)
+      .execute('sp_User_ResetPassword');
+
+    const emailRes = await sendPasswordResetEmail({
+      email: user.Email,
+      username: user.Username,
+      newPassword: generatedPassword,
+      fullName: user.FullName
+    });
+
+    res.json({
+      message: `Đã tự động đặt lại mật khẩu mới và gửi thông báo về địa chỉ email ${user.Email}`,
+      emailSent: emailRes.success
+    });
+  } catch (error) {
+    console.error('Lỗi xử lý quên mật khẩu:', error);
+    res.status(500).json({ message: 'Lỗi hệ thống khi xử lý quên mật khẩu.', error: error.message });
   }
 });
 
@@ -393,6 +553,7 @@ app.get('/api/materials', authenticateToken, authorizeRoles(1, 2, 3), async (req
       SoLuongToiThieu: m.MinRequiredQuantity,
       MaDanhMuc: m.CategoryId,
       TenDanhMuc: m.CategoryName,
+      ExpiryDate: m.ExpiryDate,
       IsActive: m.IsActive
     }));
 
@@ -404,7 +565,7 @@ app.get('/api/materials', authenticateToken, authorizeRoles(1, 2, 3), async (req
 
 // Thêm vật tư
 app.post('/api/materials', authenticateToken, authorizeRoles(1, 2), async (req, res) => {
-  const { MaCodeVatTu, TenVatTu, DonViTinh, SoLuongToiThieu, MaDanhMuc } = req.body;
+  const { MaCodeVatTu, TenVatTu, DonViTinh, SoLuongToiThieu, MaDanhMuc, ExpiryDate } = req.body;
   
   try {
     const pool = await poolPromise;
@@ -414,6 +575,7 @@ app.post('/api/materials', authenticateToken, authorizeRoles(1, 2), async (req, 
       .input('Unit', sql.NVarChar(30), DonViTinh)
       .input('MinRequiredQuantity', sql.Int, SoLuongToiThieu)
       .input('CategoryId', sql.Int, MaDanhMuc)
+      .input('ExpiryDate', sql.Date, ExpiryDate || null)
       .execute('sp_Material_Insert');
 
     res.status(201).json({ message: 'Thêm vật tư thành công!' });
@@ -425,7 +587,7 @@ app.post('/api/materials', authenticateToken, authorizeRoles(1, 2), async (req, 
 // Cập nhật vật tư
 app.put('/api/materials/:id', authenticateToken, authorizeRoles(1, 2), async (req, res) => {
   const { id } = req.params;
-  const { TenVatTu, DonViTinh, SoLuongToiThieu, MaDanhMuc } = req.body;
+  const { TenVatTu, DonViTinh, SoLuongToiThieu, MaDanhMuc, ExpiryDate } = req.body;
 
   try {
     const pool = await poolPromise;
@@ -435,6 +597,7 @@ app.put('/api/materials/:id', authenticateToken, authorizeRoles(1, 2), async (re
       .input('Unit', sql.NVarChar(30), DonViTinh)
       .input('MinRequiredQuantity', sql.Int, SoLuongToiThieu)
       .input('CategoryId', sql.Int, MaDanhMuc)
+      .input('ExpiryDate', sql.Date, ExpiryDate || null)
       .execute('sp_Material_Update');
 
     res.json({ message: 'Cập nhật vật tư thành công!' });
@@ -567,20 +730,31 @@ app.get('/api/receipts', authenticateToken, authorizeRoles(1, 2), async (req, re
   try {
     const pool = await poolPromise;
     const result = await pool.query(`
-      SELECT G.*, U.FullName AS StaffName, S.SupplierName 
+      SELECT G.*, U.FullName AS StaffName, S.SupplierName, Dep.DepartmentName 
       FROM GoodsReceiptNotes G
       INNER JOIN Users U ON G.UserId = U.UserId
-      INNER JOIN Suppliers S ON G.SupplierId = S.SupplierId
+      LEFT JOIN Suppliers S ON G.SupplierId = S.SupplierId
+      LEFT JOIN Departments Dep ON G.DepartmentId = Dep.DepartmentId
       ORDER BY G.ReceivedDate DESC
     `);
     
-    const formatted = result.recordset.map(g => ({
-      MaPhieuNhap: g.GRN_Id,
-      SoPhieuNhap: g.GRN_Code,
-      NgayNhap: g.ReceivedDate,
-      NguoiLap: g.StaffName,
-      GhiChu: g.SupplierName
-    }));
+    const formatted = result.recordset.map(g => {
+      let sourceName = g.SupplierName || '';
+      if (g.ReceiptType === 'BO_PHAN') {
+        sourceName = `[Hoàn trả] ${g.DepartmentName || 'Bộ phận'}` + (g.Note ? ` - ${g.Note}` : '');
+      } else {
+        sourceName = g.SupplierName ? `[NCC] ${g.SupplierName}` : (g.Note || 'Nhập kho');
+      }
+
+      return {
+        MaPhieuNhap: g.GRN_Id,
+        SoPhieuNhap: g.GRN_Code,
+        NgayNhap: g.ReceivedDate,
+        NguoiLap: g.StaffName,
+        LoaiNhap: g.ReceiptType || 'NCC',
+        GhiChu: sourceName
+      };
+    });
     
     res.json(formatted);
   } catch (error) {
@@ -613,12 +787,23 @@ app.get('/api/receipts/:id', authenticateToken, authorizeRoles(1, 2), async (req
       DonGiaNhap: row.UnitPrice
     }));
 
+    let sourceName = master.SupplierName || '';
+    if (master.ReceiptType === 'BO_PHAN') {
+      sourceName = `[Hoàn trả từ bộ phận] ${master.DepartmentName || ''}` + (master.Note ? ` - ${master.Note}` : '');
+    } else {
+      sourceName = master.SupplierName ? `[NCC] ${master.SupplierName}` : (master.Note || 'Nhập kho');
+    }
+
     res.json({
       MaPhieuNhap: master.GRN_Id,
       SoPhieuNhap: master.GRN_Code,
       NgayNhap: master.ReceivedDate,
       NguoiLap: master.StaffName,
-      GhiChu: master.SupplierName,
+      LoaiNhap: master.ReceiptType || 'NCC',
+      NhaCungCap: master.SupplierName,
+      BoPhan: master.DepartmentName,
+      LyDo: master.Note,
+      GhiChu: sourceName,
       ChiTiet: formattedDetails
     });
   } catch (error) {
@@ -628,14 +813,24 @@ app.get('/api/receipts/:id', authenticateToken, authorizeRoles(1, 2), async (req
 
 // Lập phiếu nhập kho (TVP Type_GRN_Detail_List)
 app.post('/api/receipts', authenticateToken, authorizeRoles(1, 2), async (req, res) => {
-  const { SupplierId, ChiTiet } = req.body;
-  if (!SupplierId || !ChiTiet || ChiTiet.length === 0) {
-    return res.status(400).json({ message: 'Vui lòng chọn nhà cung cấp và thêm vật tư nhập.' });
+  const { ReceiptType = 'NCC', SupplierId, DepartmentId, Note, ChiTiet } = req.body;
+  
+  if (!ChiTiet || ChiTiet.length === 0) {
+    return res.status(400).json({ message: 'Vui lòng thêm danh sách vật tư nhập kho.' });
+  }
+
+  if (ReceiptType === 'NCC' && !SupplierId) {
+    return res.status(400).json({ message: 'Vui lòng chọn nhà cung cấp.' });
+  }
+
+  if (ReceiptType === 'BO_PHAN' && !DepartmentId) {
+    return res.status(400).json({ message: 'Vui lòng chọn bộ phận hoàn trả vật tư.' });
   }
 
   const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, '');
   const rand = Math.floor(1000 + Math.random() * 9000);
-  const GRN_Code = `GRN-${dateStr}-${rand}`;
+  const prefix = ReceiptType === 'BO_PHAN' ? 'GRN-RET' : 'GRN';
+  const GRN_Code = `${prefix}-${dateStr}-${rand}`;
 
   try {
     const pool = await poolPromise;
@@ -649,14 +844,17 @@ app.post('/api/receipts', authenticateToken, authorizeRoles(1, 2), async (req, r
       table.rows.add(
         parseInt(item.MaterialId),
         parseInt(item.SoLuong),
-        parseFloat(item.DonGiaNhap)
+        parseFloat(item.DonGiaNhap || 0)
       );
     }
 
     const request = pool.request();
     request.input('GRN_Code', sql.VarChar(50), GRN_Code);
-    request.input('SupplierId', sql.Int, parseInt(SupplierId));
+    request.input('SupplierId', sql.Int, SupplierId ? parseInt(SupplierId) : null);
+    request.input('DepartmentId', sql.Int, DepartmentId ? parseInt(DepartmentId) : null);
     request.input('UserId', sql.Int, req.user.id);
+    request.input('ReceiptType', sql.VarChar(20), ReceiptType);
+    request.input('Note', sql.NVarChar(255), Note || null);
     request.input('Details', table);
 
     await request.execute('sp_GRN_Create');
@@ -890,6 +1088,135 @@ app.get('/api/stocktake/:id', authenticateToken, authorizeRoles(1, 2), async (re
     });
   } catch (error) {
     res.status(500).json({ message: 'Lỗi tải chi tiết kiểm kê', error: error.message });
+  }
+});
+
+// --- MODULE BÁO CÁO NHẬP - XUẤT - TỒN (REPORTS) ---
+
+// 1. Báo cáo Tổng hợp Nhập - Xuất - Tồn theo khoảng thời gian
+app.get('/api/reports/inventory-summary', authenticateToken, authorizeRoles(1, 2, 3), async (req, res) => {
+  const { fromDate, toDate, categoryId, keyword } = req.query;
+  
+  // Default range: current month if not provided
+  const now = new Date();
+  const start = fromDate ? new Date(fromDate) : new Date(now.getFullYear(), now.getMonth(), 1);
+  const end = toDate ? new Date(toDate) : new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
+
+  try {
+    const pool = await poolPromise;
+    const result = await pool.request()
+      .input('FromDate', sql.DateTime, start)
+      .input('ToDate', sql.DateTime, end)
+      .input('CategoryId', sql.Int, categoryId ? parseInt(categoryId) : null)
+      .input('Keyword', sql.NVarChar(100), keyword || null)
+      .execute('sp_Report_GetInventorySummary');
+
+    const formatted = result.recordset.map(r => {
+      const closingStock = r.ClosingStock || 0;
+      const unitPrice = r.LastUnitPrice || 0;
+      return {
+        MaterialId: r.MaterialId,
+        MaCodeVatTu: r.MaterialCode,
+        TenVatTu: r.MaterialName,
+        DonViTinh: r.Unit,
+        TenDanhMuc: r.CategoryName,
+        TonDauKy: r.OpeningStock || 0,
+        TongNhap: r.TotalImport || 0,
+        GiaTriNhap: r.TotalImportValue || 0,
+        TongXuat: r.TotalExport || 0,
+        TonCuoiKy: closingStock,
+        DonGiaThamChieu: unitPrice,
+        GiaTriTonCuoi: closingStock * unitPrice
+      };
+    });
+
+    res.json({
+      FromDate: start,
+      ToDate: end,
+      Data: formatted
+    });
+  } catch (error) {
+    res.status(500).json({ message: 'Lỗi lấy báo cáo tổng hợp tồn kho', error: error.message });
+  }
+});
+
+// 2. Báo cáo Chi tiết Nhập kho
+app.get('/api/reports/inbound-details', authenticateToken, authorizeRoles(1, 2, 3), async (req, res) => {
+  const { fromDate, toDate, categoryId } = req.query;
+  
+  const now = new Date();
+  const start = fromDate ? new Date(fromDate) : new Date(now.getFullYear(), now.getMonth(), 1);
+  const end = toDate ? new Date(toDate) : new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
+
+  try {
+    const pool = await poolPromise;
+    const result = await pool.request()
+      .input('FromDate', sql.DateTime, start)
+      .input('ToDate', sql.DateTime, end)
+      .input('CategoryId', sql.Int, categoryId ? parseInt(categoryId) : null)
+      .execute('sp_Report_GetInboundDetails');
+
+    const formatted = result.recordset.map(r => ({
+      SoPhieuNhap: r.GRN_Code,
+      NgayNhap: r.ReceivedDate,
+      LoaiNhap: r.ReceiptType === 'BO_PHAN' ? 'Hoàn trả từ bộ phận' : 'Nhập mới từ NCC',
+      NguonCungCap: r.SourceName || 'N/A',
+      NguoiLap: r.StaffName,
+      MaCodeVatTu: r.MaterialCode,
+      TenVatTu: r.MaterialName,
+      DonViTinh: r.Unit,
+      TenDanhMuc: r.CategoryName,
+      SoLuong: r.Quantity,
+      DonGia: r.UnitPrice,
+      ThanhTien: r.TotalAmount
+    }));
+
+    res.json({
+      FromDate: start,
+      ToDate: end,
+      Data: formatted
+    });
+  } catch (error) {
+    res.status(500).json({ message: 'Lỗi lấy chi tiết nhập kho', error: error.message });
+  }
+});
+
+// 3. Báo cáo Chi tiết Xuất kho
+app.get('/api/reports/outbound-details', authenticateToken, authorizeRoles(1, 2, 3), async (req, res) => {
+  const { fromDate, toDate, categoryId } = req.query;
+  
+  const now = new Date();
+  const start = fromDate ? new Date(fromDate) : new Date(now.getFullYear(), now.getMonth(), 1);
+  const end = toDate ? new Date(toDate) : new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
+
+  try {
+    const pool = await poolPromise;
+    const result = await pool.request()
+      .input('FromDate', sql.DateTime, start)
+      .input('ToDate', sql.DateTime, end)
+      .input('CategoryId', sql.Int, categoryId ? parseInt(categoryId) : null)
+      .execute('sp_Report_GetOutboundDetails');
+
+    const formatted = result.recordset.map(r => ({
+      SoPhieuXuat: r.GDN_Code,
+      NgayXuat: r.DeliveryDate,
+      BoPhanNhan: r.DepartmentName,
+      LyDoXuat: r.Reason || 'Cấp phát sinh hoạt',
+      NguoiLap: r.StaffName,
+      MaCodeVatTu: r.MaterialCode,
+      TenVatTu: r.MaterialName,
+      DonViTinh: r.Unit,
+      TenDanhMuc: r.CategoryName,
+      SoLuong: r.Quantity
+    }));
+
+    res.json({
+      FromDate: start,
+      ToDate: end,
+      Data: formatted
+    });
+  } catch (error) {
+    res.status(500).json({ message: 'Lỗi lấy chi tiết xuất kho', error: error.message });
   }
 });
 
@@ -1192,6 +1519,22 @@ app.post('/api/maintenance/receipts', authenticateToken, authorizeRoles(1, 3), a
   }
 });
 
+
+// ─── VẬT TƯ SẮP HẾT HẠN ────────────────────────────────────────────────
+app.get('/api/reports/expiring-soon', authenticateToken, authorizeRoles(1, 2, 3), async (req, res) => {
+  try {
+    const pool = await poolPromise;
+    const daysAhead = parseInt(req.query.days) || 30;
+    const topN = parseInt(req.query.top) || 10;
+    const result = await pool.request()
+      .input('DaysAhead', daysAhead)
+      .input('TopN', topN)
+      .execute('sp_Material_GetExpiringSoon');
+    res.json(result.recordset);
+  } catch (error) {
+    res.status(500).json({ message: 'Lỗi lấy danh sách vật tư sắp hết hạn', error: error.message });
+  }
+});
 
 // Chạy server
 app.listen(PORT, async () => {

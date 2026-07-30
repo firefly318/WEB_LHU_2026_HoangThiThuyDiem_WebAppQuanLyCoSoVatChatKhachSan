@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import api from './api';
 import { 
   LayoutDashboard, Layers, Box, FileInput, FileOutput, 
-  ClipboardList, LogOut, Key, User, Users, Bell, ChevronRight, AlertTriangle, X, Truck, Lock, Wrench
+  ClipboardList, LogOut, Key, User, Users, Bell, ChevronRight, AlertTriangle, X, Truck, Lock, Wrench, FileSpreadsheet
 } from 'lucide-react';
 
 import Dashboard from './components/Dashboard';
@@ -14,6 +14,7 @@ import Stocktake from './components/Stocktake';
 import SupplierList from './components/SupplierList';
 import Maintenance from './components/Maintenance';
 import UserList from './components/UserList';
+import ReportManagement from './components/ReportManagement';
 
 
 
@@ -50,6 +51,13 @@ export default function App() {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [loginError, setLoginError] = useState('');
+
+  // Forgot Password States
+  const [isForgotModalOpen, setIsForgotModalOpen] = useState(false);
+  const [forgotInput, setForgotInput] = useState('');
+  const [forgotError, setForgotError] = useState('');
+  const [forgotSuccess, setForgotSuccess] = useState('');
+  const [forgotLoading, setForgotLoading] = useState(false);
 
   // Password Modal States
   const [isPwdModalOpen, setIsPwdModalOpen] = useState(false);
@@ -128,6 +136,23 @@ export default function App() {
     }
   };
 
+  const handleForgotPassword = async (e) => {
+    e.preventDefault();
+    setForgotError('');
+    setForgotSuccess('');
+    setForgotLoading(true);
+
+    try {
+      const res = await api.post('/auth/forgot-password', { usernameOrEmail: forgotInput });
+      setForgotSuccess(res.data.message || 'Đã gửi thông báo mật khẩu mới về email của bạn!');
+      setForgotInput('');
+    } catch (err) {
+      setForgotError(err.response?.data?.message || 'Không thể xử lý yêu cầu đặt lại mật khẩu.');
+    } finally {
+      setForgotLoading(false);
+    }
+  };
+
   if (!token) {
     return (
       <div className="min-h-screen w-full flex items-center justify-center p-4 relative overflow-hidden bg-slate-950">
@@ -198,7 +223,13 @@ export default function App() {
                 <input type="checkbox" className="rounded text-[#0e5a6a] focus:ring-[#0e5a6a]" />
                 <span>Ghi nhớ đăng nhập</span>
               </label>
-              <a href="#" className="hover:text-[#0e5a6a] hover:underline transition-all">Quên mật khẩu?</a>
+              <button 
+                type="button" 
+                onClick={() => { setIsForgotModalOpen(true); setForgotError(''); setForgotSuccess(''); }}
+                className="hover:text-[#0e5a6a] hover:underline transition-all text-[#0e5a6a] font-semibold"
+              >
+                Quên mật khẩu?
+              </button>
             </div>
 
             <button
@@ -216,12 +247,80 @@ export default function App() {
             tech_vien / tech123 (Nhân viên kỹ thuật)
           </div>
         </div>
+
+        {/* Modal Quên mật khẩu */}
+        {isForgotModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-sm animate-fadeIn">
+            <div className="bg-white rounded-3xl w-full max-w-md p-6 shadow-2xl space-y-4 border border-sky-100 text-slate-800">
+              <div className="flex items-center justify-between border-b border-sky-100 pb-3">
+                <h3 className="text-base font-bold text-slate-800 flex items-center gap-2">
+                  <Key size={18} className="text-[#0e5a6a]" />
+                  Quên mật khẩu tài khoản
+                </h3>
+                <button 
+                  onClick={() => setIsForgotModalOpen(false)}
+                  className="text-slate-400 hover:text-slate-700 transition-all"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+
+              <form onSubmit={handleForgotPassword} className="space-y-4">
+                <p className="text-xs text-slate-500 leading-relaxed">
+                  Nhập <strong>Tên đăng nhập</strong> hoặc <strong>Email</strong> đã đăng ký của bạn. Hệ thống sẽ tự động tạo mật khẩu ngẫu nhiên mới và gửi trực tiếp về Email của bạn.
+                </p>
+
+                {forgotError && (
+                  <div className="p-3 bg-red-50 border border-red-100 text-red-600 text-xs rounded-xl flex items-center gap-1.5 font-medium">
+                    <AlertTriangle size={14} /> {forgotError}
+                  </div>
+                )}
+
+                {forgotSuccess && (
+                  <div className="p-3 bg-emerald-50 border border-emerald-100 text-emerald-600 text-xs rounded-xl font-semibold leading-relaxed">
+                    {forgotSuccess}
+                  </div>
+                )}
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1.5">TÊN ĐĂNG NHẬP / EMAIL *</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="ví dụ: admin hoặc user@novasphere.com"
+                    value={forgotInput}
+                    onChange={(e) => setForgotInput(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm text-slate-800 focus:outline-none focus:border-[#0e5a6a] font-medium"
+                  />
+                </div>
+
+                <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-sky-100">
+                  <button
+                    type="button"
+                    onClick={() => setIsForgotModalOpen(false)}
+                    className="px-4 py-2 border border-slate-200 hover:bg-slate-50 text-slate-600 rounded-xl text-xs font-semibold transition-all"
+                  >
+                    Đóng
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={forgotLoading}
+                    className="px-4 py-2 bg-[#0e5a6a] hover:bg-[#0a4552] text-white rounded-xl text-xs font-bold transition-all shadow-md shadow-teal-900/10 disabled:opacity-50"
+                  >
+                    {forgotLoading ? 'Đang gửi email...' : 'Gửi mật khẩu qua Email'}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
       </div>
     );
   }
 
   const menuItems = [
     { id: 'dashboard', label: 'Bảng Điều Khiển', icon: LayoutDashboard },
+    { id: 'reports', label: 'Báo Cáo Nhập Xuất Tồn', icon: FileSpreadsheet },
     { id: 'categories', label: 'Loại Vật Tư', icon: Layers },
     { id: 'materials', label: 'Quản Lý Vật Tư', icon: Box },
     { id: 'suppliers', label: 'Nhà Cung Cấp', icon: Truck },
@@ -358,6 +457,7 @@ export default function App() {
         <main className="flex-1 overflow-hidden p-6 print:p-0 flex flex-col min-h-0">
           {activeTab === 'dashboard' && hasPermission('dashboard') && <div className="flex-1 min-h-0 overflow-hidden"><Dashboard /></div>}
           {activeTab !== 'dashboard' && <div className="flex-1 overflow-y-auto">
+          {activeTab === 'reports' && hasPermission('reports') && <ReportManagement />}
           {activeTab === 'categories' && hasPermission('categories') && <CategoryList />}
           {activeTab === 'materials' && hasPermission('materials') && <MaterialList />}
           {activeTab === 'suppliers' && hasPermission('suppliers') && <SupplierList />}
@@ -368,6 +468,24 @@ export default function App() {
           {activeTab === 'users' && hasPermission('users') && <UserList />}
           </div>}
         </main>
+
+        {/* FOOTER */}
+        <footer className="h-9 shrink-0 bg-white/70 border-t border-sky-100/80 backdrop-blur-md flex items-center justify-between px-6 no-print text-[10px] text-slate-400 select-none">
+          <div className="flex items-center gap-1.5">
+            <img src="/logo.png" alt="Logo" className="h-4 w-4 object-cover rounded" />
+            <span className="font-semibold text-slate-500">Nova Sphere Hotel &amp; Inventory</span>
+            <span className="mx-1 text-slate-300">|</span>
+            <span>© {new Date().getFullYear()} Hoàng Thị Thúy Diễm — MSSV: 725000005</span>
+          </div>
+          <div className="hidden md:flex items-center gap-3">
+            <span className="px-2 py-0.5 bg-sky-50 border border-sky-100 rounded-full text-sky-500 font-medium">ReactJS + Vite</span>
+            <span className="px-2 py-0.5 bg-emerald-50 border border-emerald-100 rounded-full text-emerald-500 font-medium">Node.js + Express</span>
+            <span className="px-2 py-0.5 bg-indigo-50 border border-indigo-100 rounded-full text-indigo-500 font-medium">SQL Server</span>
+            <span className="text-slate-300">|</span>
+            <span className="font-medium text-slate-400">Trường Đại học Lạc Hồng — LHU 2026</span>
+          </div>
+        </footer>
+
       </div>
 
       {/* PASSWORD CHANGE MODAL */}
