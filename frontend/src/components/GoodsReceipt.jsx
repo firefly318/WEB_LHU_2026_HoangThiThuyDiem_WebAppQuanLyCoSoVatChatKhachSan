@@ -115,12 +115,18 @@ export default function GoodsReceipt() {
   const [selectedReceipt, setSelectedReceipt] = useState(null);
   const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
 
+  const createInitialReceiptItems = () => [
+    { MaterialId: '', SoLuong: 1, DonGiaNhap: 0, TinhChat: 'Hàng hóa', DonViTinh: '', GhiChu: '' },
+    { MaterialId: '', SoLuong: 1, DonGiaNhap: 0, TinhChat: 'Hàng hóa', DonViTinh: '', GhiChu: '' },
+    { MaterialId: '', SoLuong: 1, DonGiaNhap: 0, TinhChat: 'Hàng hóa', DonViTinh: '', GhiChu: '' }
+  ];
+
   // Form states
   const [receiptType, setReceiptType] = useState('NCC'); // 'NCC' | 'BO_PHAN'
   const [supplierId, setSupplierId] = useState('');
   const [departmentId, setDepartmentId] = useState('');
   const [note, setNote] = useState('');
-  const [items, setItems] = useState([{ MaterialId: '', SoLuong: 1, DonGiaNhap: 0 }]);
+  const [items, setItems] = useState(createInitialReceiptItems());
   const [submitError, setSubmitError] = useState(null);
   const [submitSuccess, setSubmitSuccess] = useState(false);
   const [historySearch, setHistorySearch] = useState('');
@@ -231,13 +237,17 @@ export default function GoodsReceipt() {
     e.preventDefault();
     setSubmitError(null);
 
-    // Check material selection & quantity & price
-    for (let i = 0; i < items.length; i++) {
-      const item = items[i];
-      if (!item.MaterialId) {
-        setSubmitError(`Dòng ${i + 1}: Vui lòng chọn vật tư cần nhập.`);
-        return;
-      }
+    // Filter valid items where material is selected
+    const validItems = items.filter(item => item.MaterialId);
+
+    if (validItems.length === 0) {
+      setSubmitError('Vui lòng chọn ít nhất 1 mặt hàng vật tư nhập kho.');
+      return;
+    }
+
+    // Check material quantity & price for selected items
+    for (let i = 0; i < validItems.length; i++) {
+      const item = validItems[i];
       if (!item.SoLuong || parseInt(item.SoLuong) <= 0) {
         setSubmitError(`Dòng ${i + 1}: Số lượng nhập phải lớn hơn 0.`);
         return;
@@ -273,7 +283,7 @@ export default function GoodsReceipt() {
         SupplierId: receiptType === 'NCC' ? parseInt(supplierId) : null,
         DepartmentId: receiptType === 'BO_PHAN' ? parseInt(departmentId) : null,
         Note: note,
-        ChiTiet: items.map(item => ({
+        ChiTiet: validItems.map(item => ({
           MaterialId: parseInt(item.MaterialId),
           SoLuong: parseInt(item.SoLuong),
           DonGiaNhap: receiptType === 'BO_PHAN' ? 0 : parseFloat(item.DonGiaNhap || 0)
@@ -285,7 +295,7 @@ export default function GoodsReceipt() {
       setSupplierId('');
       setDepartmentId('');
       setNote('');
-      setItems([{ MaterialId: '', SoLuong: 1, DonGiaNhap: 0, TinhChat: 'Hàng hóa', DonViTinh: '', GhiChu: '' }]);
+      setItems(createInitialReceiptItems());
       fetchReceipts();
       setTimeout(() => {
         setSubmitSuccess(false);
@@ -813,7 +823,9 @@ export default function GoodsReceipt() {
               type="button"
               onClick={() => {
                 setSupplierId('');
-                setItems([{ MaterialId: '', SoLuong: 1, DonGiaNhap: 0 }]);
+                setDepartmentId('');
+                setNote('');
+                setItems(createInitialReceiptItems());
                 setActiveTab('list');
               }}
               className="px-4 py-2 border border-sky-150 hover:bg-slate-50 text-slate-500 rounded-xl text-sm font-semibold transition-all"

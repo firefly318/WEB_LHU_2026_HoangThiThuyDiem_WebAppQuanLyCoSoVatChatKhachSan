@@ -158,10 +158,16 @@ export default function GoodsDelivery() {
   const [selectedDelivery, setSelectedDelivery] = useState(null);
   const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
 
+  const createInitialDeliveryItems = () => [
+    { MaterialId: '', SoLuong: 1, CategoryId: '', DonViTinh: '', GhiChu: '' },
+    { MaterialId: '', SoLuong: 1, CategoryId: '', DonViTinh: '', GhiChu: '' },
+    { MaterialId: '', SoLuong: 1, CategoryId: '', DonViTinh: '', GhiChu: '' }
+  ];
+
   // Form states
   const [departmentId, setDepartmentId] = useState('');
   const [note, setNote] = useState('');
-  const [items, setItems] = useState([{ MaterialId: '', SoLuong: 1 }]);
+  const [items, setItems] = useState(createInitialDeliveryItems());
   const [submitError, setSubmitError] = useState(null);
   const [submitSuccess, setSubmitSuccess] = useState(false);
   const [historySearch, setHistorySearch] = useState('');
@@ -275,10 +281,19 @@ export default function GoodsDelivery() {
     e.preventDefault();
     setSubmitError(null);
 
-    const invalidItem = items.some(item => !item.MaterialId || item.SoLuong <= 0);
-    if (invalidItem) {
-      setSubmitError('Vui lòng chọn vật tư và nhập số lượng xuất lớn hơn 0.');
+    const validItems = items.filter(item => item.MaterialId);
+
+    if (validItems.length === 0) {
+      setSubmitError('Vui lòng chọn ít nhất 1 mặt hàng vật tư xuất kho.');
       return;
+    }
+
+    for (let i = 0; i < validItems.length; i++) {
+      const item = validItems[i];
+      if (!item.SoLuong || parseInt(item.SoLuong) <= 0) {
+        setSubmitError(`Dòng ${i + 1}: Số lượng xuất phải lớn hơn 0.`);
+        return;
+      }
     }
 
     if (!departmentId) {
@@ -290,7 +305,7 @@ export default function GoodsDelivery() {
       const payload = {
         DepartmentId: parseInt(departmentId),
         GhiChu: note,
-        ChiTiet: items.map(item => ({
+        ChiTiet: validItems.map(item => ({
           MaterialId: parseInt(item.MaterialId),
           SoLuong: parseInt(item.SoLuong),
           GhiChu: item.GhiChu || ''
@@ -301,7 +316,7 @@ export default function GoodsDelivery() {
       setSubmitSuccess(true);
       setDepartmentId('');
       setNote('');
-      setItems([{ MaterialId: '', SoLuong: 1, CategoryId: '', DonViTinh: '', GhiChu: '' }]);
+      setItems(createInitialDeliveryItems());
       fetchDeliveries();
       setTimeout(() => {
         setSubmitSuccess(false);
@@ -726,7 +741,7 @@ export default function GoodsDelivery() {
               onClick={() => {
                 setDepartmentId('');
                 setNote('');
-                setItems([{ MaterialId: '', SoLuong: 1, CategoryId: '', DonViTinh: '', GhiChu: '' }]);
+                setItems(createInitialDeliveryItems());
                 setActiveTab('list');
               }}
               className="px-4 py-2 border border-sky-150 hover:bg-slate-50 text-slate-500 rounded-xl text-sm font-semibold transition-all"
